@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(ytune_security)
+add_library(ytune_security SHARED native_security.cpp)
+find_library(log-lib log)
+target_link_libraries(ytune_security ${log-lib})
+target_compile_options(ytune_security PRIVATE -Wall -Wextra -fstack-protector-strong -D_FORTIFY_SOURCE=2)
