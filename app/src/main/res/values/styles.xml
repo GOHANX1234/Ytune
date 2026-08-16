@@ -1,17 +1,17 @@
 <resources>
     <style name="Theme.Ytune" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
-        <item name="android:windowBackground">#10131B</item>
-        <item name="android:colorAccent">#6C63FF</item>
-        <item name="android:navigationBarColor">#10131B</item>
-        <item name="android:statusBarColor">#10131B</item>
+        <item name="android:windowBackground">#090B0A</item>
+        <item name="android:colorAccent">#1ED760</item>
+        <item name="android:navigationBarColor">#090B0A</item>
+        <item name="android:statusBarColor">#090B0A</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
 
     <style name="Theme.Ytune.Splash" parent="Theme.SplashScreen">
-        <item name="windowSplashScreenBackground">#10131B</item>
+        <item name="windowSplashScreenBackground">#090B0A</item>
         <item name="windowSplashScreenAnimatedIcon">@drawable/ic_ytune</item>
-        <item name="windowSplashScreenIconBackgroundColor">#10131B</item>
+        <item name="windowSplashScreenIconBackgroundColor">#090B0A</item>
         <item name="postSplashScreenTheme">@style/Theme.Ytune</item>
     </style>
 </resources>

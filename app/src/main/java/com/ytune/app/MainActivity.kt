@@ -9,6 +9,7 @@ import android.animation.AnimatorSet
 import android.animation.ObjectAnimator
 import android.view.animation.DecelerateInterpolator
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -49,6 +50,7 @@ import com.ytune.app.player.*
 import com.ytune.app.ui.theme.YtuneTheme
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -125,6 +127,9 @@ class YtuneViewModel(application: android.app.Application) : AndroidViewModel(ap
     fun recordPlayed(track: TrackSummary) = viewModelScope.launch { repository.recordPlayed(track) }
     fun createPlaylist(name: String) = viewModelScope.launch { if (name.isNotBlank()) repository.createPlaylist(name) }
     fun addToPlaylist(id: String, track: TrackSummary) = viewModelScope.launch { repository.addToPlaylist(id, track) }
+    fun playlistTracks(id: String): Flow<List<TrackEntity>> = repository.playlistTracks(id)
+    fun removeFromPlaylist(id: String, videoId: String) = viewModelScope.launch { repository.removeFromPlaylist(id, videoId) }
+    fun deletePlaylist(id: String) = viewModelScope.launch { repository.deletePlaylist(id) }
     fun setQuality(value: String) = viewModelScope.launch { repository.setQuality(value) }
     fun setWifiOnly(value: Boolean) = viewModelScope.launch { repository.setWifiOnly(value) }
 }
@@ -176,7 +181,7 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
                 } else when (destination.value) {
                     Destination.Home -> HomeScreen(vm, { destination.value = Destination.Search; vm.search(it) }, ::play, downloader::download, connection::addToQueue, playlists, vm::addToPlaylist)
                     Destination.Search -> SearchScreen(vm, ::play, { vm.toggleFavorite(it) }, favorites.map { it.track.videoId }.toSet(), downloader::download, connection::addToQueue, playlists, vm::addToPlaylist)
-                    Destination.Library -> LibraryScreen(favorites, history, playlists, settings, vm::setQuality, vm::createPlaylist, ::play, { vm.toggleFavorite(it) }, downloader::download, connection::addToQueue, vm::addToPlaylist)
+                    Destination.Library -> LibraryScreen(favorites, history, playlists, settings, vm::setQuality, vm::createPlaylist, ::play, { vm.toggleFavorite(it) }, downloader::download, connection::addToQueue, vm::addToPlaylist, vm::playlistTracks, vm::removeFromPlaylist, vm::deletePlaylist)
                     Destination.Downloads -> DownloadsScreen(downloads, downloadProgress, ::play, downloader)
                 }
                 if (vm.loading) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
@@ -209,12 +214,48 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
     }
 }
 
-@Composable private fun LibraryScreen(favorites: List<FavoriteTrack>, history: List<HistoryTrack>, playlists: List<LocalPlaylistEntity>, settings: PlaybackPreferences, setQuality: (String) -> Unit, createPlaylist: (String) -> Unit, play: (TrackSummary) -> Unit, remove: (TrackSummary) -> Unit, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, addToPlaylist: (String, TrackSummary) -> Unit) {
-    var showCreate by remember { mutableStateOf(false) }; var showSettings by remember { mutableStateOf(false) }; var name by remember { mutableStateOf("") }
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LibraryScreen(favorites: List<FavoriteTrack>, history: List<HistoryTrack>, playlists: List<LocalPlaylistEntity>, settings: PlaybackPreferences, setQuality: (String) -> Unit, createPlaylist: (String) -> Unit, play: (TrackSummary) -> Unit, remove: (TrackSummary) -> Unit, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, addToPlaylist: (String, TrackSummary) -> Unit, playlistTracks: (String) -> Flow<List<TrackEntity>>, removeFromPlaylist: (String, String) -> Unit, deletePlaylist: (String) -> Unit) {
+    var showCreate by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    var name by remember { mutableStateOf("") }
+    var selectedPlaylistId by remember { mutableStateOf<String?>(null) }
+    val selectedPlaylist = playlists.firstOrNull { it.id == selectedPlaylistId }
+
+    if (selectedPlaylist != null) {
+        val tracksFlow = remember(selectedPlaylist.id) { playlistTracks(selectedPlaylist.id) }
+        val tracks by tracksFlow.collectAsStateWithLifecycle(emptyList())
+        BackHandler { selectedPlaylistId = null }
+        PlaylistDetailScreen(
+            playlist = selectedPlaylist,
+            tracks = tracks,
+            play = play,
+            download = download,
+            queue = queue,
+            playlists = playlists,
+            addToPlaylist = addToPlaylist,
+            remove = { removeFromPlaylist(selectedPlaylist.id, it) },
+            close = { selectedPlaylistId = null },
+            delete = { deletePlaylist(selectedPlaylist.id); selectedPlaylistId = null }
+        )
+        return
+    }
+
     LazyColumn(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { Row(verticalAlignment = Alignment.CenterVertically) { Text("Your Library", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f)); IconButton({ showSettings = true }) { Icon(Icons.Default.Settings, "Settings") } } }
         item { Row(verticalAlignment = Alignment.CenterVertically) { Text("Playlists", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f)); IconButton({ showCreate = true }) { Icon(Icons.Default.Add, "Create playlist") } } }
-        items(playlists) { Text(it.name, Modifier.fillMaxWidth().padding(vertical = 10.dp), style = MaterialTheme.typography.titleMedium) }
+        items(playlists, key = { it.id }) { playlist ->
+            Surface(onClick = { selectedPlaylistId = playlist.id }, shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
+                ListItem(
+                    headlineContent = { Text(playlist.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    supportingContent = { Text("View songs", color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    leadingContent = { Icon(Icons.Default.QueueMusic, null, tint = MaterialTheme.colorScheme.primary) },
+                    trailingContent = { Icon(Icons.Default.ChevronRight, "Open playlist") },
+                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+                )
+            }
+        }
         item { Text("Favorites", style = MaterialTheme.typography.titleLarge) }
         if (favorites.isEmpty()) item { Text("Favorite tracks to keep them here.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         items(favorites) { TrackRow(it.track.toSummary(), play, { remove(it.track.toSummary()) }, true, download, queue, playlists, addToPlaylist) }
@@ -225,27 +266,76 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
     if (showSettings) AlertDialog(onDismissRequest = { showSettings = false }, title = { Text("Settings") }, text = { Column { Text("Streaming quality"); SingleChoiceSegmentedButtonRow { listOf("low", "medium", "best").forEachIndexed { index, value -> SegmentedButton(selected = settings.quality == value, onClick = { setQuality(value) }, shape = SegmentedButtonDefaults.itemShape(index, 3)) { Text(value.replaceFirstChar { it.uppercase() }) } } }; Spacer(Modifier.height(12.dp)); Text("Downloads use any available network.", color = MaterialTheme.colorScheme.onSurfaceVariant) } }, confirmButton = { TextButton({ showSettings = false }) { Text("Done") } })
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlaylistDetailScreen(playlist: LocalPlaylistEntity, tracks: List<TrackEntity>, play: (TrackSummary) -> Unit, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit, remove: (String) -> Unit, close: () -> Unit, delete: () -> Unit) {
+    var confirmDelete by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(close) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+            Text(playlist.name, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            IconButton({ confirmDelete = true }) { Icon(Icons.Default.DeleteOutline, "Delete playlist") }
+        }
+        Text("${tracks.size} ${if (tracks.size == 1) "song" else "songs"}", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 48.dp))
+        Spacer(Modifier.height(12.dp))
+        if (tracks.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Songs added to this playlist will appear here.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(tracks, key = { it.videoId }) { track ->
+                    TrackRow(track.toSummary(), play, {}, false, download, queue, playlists, addToPlaylist, onRemove = { remove(track.videoId) })
+                }
+            }
+        }
+    }
+    if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete playlist?") }, text = { Text("${playlist.name} and its song list will be removed.") }, confirmButton = { TextButton({ confirmDelete = false; delete() }) { Text("Delete") } }, dismissButton = { TextButton({ confirmDelete = false }) { Text("Cancel") } })
+}
+
 @Composable private fun DownloadsScreen(downloads: List<DownloadEntity>, progress: Map<String, Float>, play: (TrackSummary) -> Unit, downloader: DownloadController) {
+    val context = LocalContext.current
     Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp, vertical = 4.dp)) {
         Text("Downloads", style = MaterialTheme.typography.headlineLarge)
+        Text("Your music, available offline", color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(12.dp))
         if (downloads.isEmpty()) Text("Downloaded tracks will be available without a connection.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        LazyColumn { items(downloads) { item ->
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 16.dp)) { items(downloads, key = { it.videoId }) { item ->
             val track = TrackSummary(item.videoId, item.title.ifBlank { item.videoId }, item.artists.split("\u001f").filter { it.isNotBlank() }, highest_resolution_thumbnail = item.artworkUrl)
             val percent = progress[item.videoId] ?: item.percent
             val active = item.state == androidx.media3.exoplayer.offline.Download.STATE_QUEUED || item.state == androidx.media3.exoplayer.offline.Download.STATE_DOWNLOADING
-            Column {
-                ListItem(modifier = Modifier.clickable { if (!active) play(track) }, headlineContent = { Text(track.title) }, supportingContent = { Text(if (item.state == androidx.media3.exoplayer.offline.Download.STATE_COMPLETED) "Available offline" else if (item.error != null) "Download failed" else "Downloading ${percent.toInt()}%") }, trailingContent = { IconButton({ downloader.remove(item.videoId) }) { Icon(Icons.Default.Delete, "Remove download") } })
-                if (active) LinearProgressIndicator(progress = { (percent / 100f).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+            val completed = item.state == androidx.media3.exoplayer.offline.Download.STATE_COMPLETED
+            val artist = track.artists.joinToString().ifBlank { "Unknown artist" }
+            val artwork = ArtworkCache.displayUri(context, item.videoId, item.artworkUrl)
+            Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().clickable(enabled = completed) { play(track) }) {
+                Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    AsyncImage(artwork, null, Modifier.size(72.dp).clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Crop)
+                    Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                        Text(track.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(artist, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Spacer(Modifier.height(6.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(if (completed) Icons.Default.OfflinePin else if (item.error != null) Icons.Default.ErrorOutline else Icons.Default.Download, null, Modifier.size(16.dp), tint = if (item.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(5.dp))
+                            Text(if (completed) "Available offline" else if (item.error != null) "Download failed" else "Downloading ${percent.toInt()}%", style = MaterialTheme.typography.labelMedium, color = if (item.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (active) {
+                            Spacer(Modifier.height(8.dp))
+                            LinearProgressIndicator(progress = { (percent / 100f).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        if (completed) IconButton({ play(track) }) { Icon(Icons.Default.PlayArrow, "Play offline") }
+                        IconButton({ downloader.remove(item.videoId) }) { Icon(Icons.Default.DeleteOutline, "Remove download") }
+                    }
+                }
             }
         } }
     }
 }
 
-@Composable private fun TrackRow(track: TrackSummary, play: (TrackSummary) -> Unit, favorite: () -> Unit, selected: Boolean, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit) {
+@Composable private fun TrackRow(track: TrackSummary, play: (TrackSummary) -> Unit, favorite: () -> Unit, selected: Boolean, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit, onRemove: (() -> Unit)? = null) {
     var menu by remember { mutableStateOf(false) }
     val downloading = track.video_id in LocalPendingDownloads.current
-    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) { ListItem(modifier = Modifier.clickable { play(track) }, colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer), leadingContent = { AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.size(58.dp), contentScale = ContentScale.Crop) }, headlineContent = { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, supportingContent = { Text(track.artists.joinToString().ifBlank { track.uploader ?: "YouTube Music" }, maxLines = 1, overflow = TextOverflow.Ellipsis) }, trailingContent = { Row { IconButton(favorite) { Icon(if (selected) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "Favorite") }; Box { if (downloading) CircularProgressIndicator(Modifier.size(24.dp).align(Alignment.Center), strokeWidth = 2.dp) else IconButton({ menu = true }) { Icon(Icons.Default.MoreVert, "More") }; DropdownMenu(menu, { menu = false }) { DropdownMenuItem({ Text("Add to queue") }, { queue(track); menu = false }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) }); DropdownMenuItem({ Text(if (downloading) "Starting download…" else "Download") }, { if (!downloading) download(track); menu = false }, enabled = !downloading, leadingIcon = { if (downloading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Download, null) }); playlists.forEach { list -> DropdownMenuItem({ Text("Add to ${list.name}") }, { addToPlaylist(list.id, track); menu = false }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) }) } } } } }) }
+    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) { ListItem(modifier = Modifier.clickable { play(track) }, colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer), leadingContent = { AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.size(58.dp).clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Crop) }, headlineContent = { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, supportingContent = { Text(track.artists.joinToString().ifBlank { track.uploader ?: "YouTube Music" }, maxLines = 1, overflow = TextOverflow.Ellipsis) }, trailingContent = { Row { IconButton(favorite) { Icon(if (selected) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "Favorite") }; Box { if (downloading) CircularProgressIndicator(Modifier.size(24.dp).align(Alignment.Center), strokeWidth = 2.dp) else IconButton({ menu = true }) { Icon(Icons.Default.MoreVert, "More") }; DropdownMenu(menu, { menu = false }) { DropdownMenuItem({ Text("Add to queue") }, { queue(track); menu = false }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) }); DropdownMenuItem({ Text(if (downloading) "Starting download…" else "Download") }, { if (!downloading) download(track); menu = false }, enabled = !downloading, leadingIcon = { if (downloading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Download, null) }); onRemove?.let { action -> DropdownMenuItem({ Text("Remove from playlist") }, { action(); menu = false }, leadingIcon = { Icon(Icons.Default.RemoveCircleOutline, null) }) }; playlists.forEach { list -> DropdownMenuItem({ Text("Add to ${list.name}") }, { addToPlaylist(list.id, track); menu = false }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) }) } } } } }) }
 }
 
 @Composable private fun MiniPlayer(track: TrackSummary, playing: Boolean, toggle: () -> Unit, next: () -> Unit, expand: () -> Unit) {
@@ -292,7 +382,7 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
         item { AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.fillMaxWidth().widthIn(max = 460.dp).aspectRatio(1f).clip(RoundedCornerShape(20.dp)), contentScale = ContentScale.Crop) }
         item { Spacer(Modifier.height(24.dp)); Text(track.title, Modifier.fillMaxWidth(), style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis); Text(track.artists.joinToString().ifBlank { track.uploader ?: "Unknown artist" }, Modifier.fillMaxWidth().padding(top = 4.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
         item { Spacer(Modifier.height(14.dp)); Slider(state.positionMs.toFloat(), { connection.seek(it.toLong()) }, valueRange = 0f..state.durationMs.coerceAtLeast(1).toFloat()); Row(Modifier.fillMaxWidth()) { Text(formatTime(state.positionMs), style = MaterialTheme.typography.labelSmall); Spacer(Modifier.weight(1f)); Text("-${formatTime((state.durationMs - state.positionMs).coerceAtLeast(0))}", style = MaterialTheme.typography.labelSmall) } }
-        item { Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) { IconButton(connection::toggleShuffle) { Icon(Icons.Default.Shuffle, "Shuffle", tint = if (state.shuffle) MaterialTheme.colorScheme.primary else LocalContentColor.current) }; IconButton(connection::previous, enabled = state.hasPrevious) { Icon(Icons.Default.SkipPrevious, "Previous", Modifier.size(34.dp)) }; FilledIconButton(connection::toggle, Modifier.size(64.dp)) { Icon(if (state.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play", Modifier.size(36.dp)) }; IconButton(connection::next, enabled = state.hasNext) { Icon(Icons.Default.SkipNext, "Next", Modifier.size(34.dp)) }; IconButton(connection::cycleRepeat) { Icon(if (state.repeatMode == 1) Icons.Default.RepeatOne else Icons.Default.Repeat, "Repeat", tint = if (state.repeatMode != 0) MaterialTheme.colorScheme.primary else LocalContentColor.current) } } }
+        item { Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) { IconButton(connection::toggleShuffle) { Icon(Icons.Default.Shuffle, "Shuffle", tint = if (state.shuffle) MaterialTheme.colorScheme.primary else LocalContentColor.current) }; IconButton(connection::previous, enabled = state.hasPrevious) { Icon(Icons.Default.SkipPrevious, "Previous", Modifier.size(34.dp)) }; FilledIconButton(connection::toggle, Modifier.size(52.dp)) { Icon(if (state.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play", Modifier.size(28.dp)) }; IconButton(connection::next, enabled = state.hasNext) { Icon(Icons.Default.SkipNext, "Next", Modifier.size(34.dp)) }; IconButton(connection::cycleRepeat) { Icon(if (state.repeatMode == 1) Icons.Default.RepeatOne else Icons.Default.Repeat, "Repeat", tint = if (state.repeatMode != 0) MaterialTheme.colorScheme.primary else LocalContentColor.current) } } }
         item { OutlinedButton(showLyrics, Modifier.fillMaxWidth().padding(vertical = 8.dp)) { Icon(Icons.Default.Lyrics, null); Spacer(Modifier.width(8.dp)); Text("Swipe for lyrics") } }
         if (state.queue.isNotEmpty()) {
             item { Row(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) { Text("Up next", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge); Text("${state.queue.size} tracks", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium) } }

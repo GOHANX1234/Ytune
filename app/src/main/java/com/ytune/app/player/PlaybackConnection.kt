@@ -8,6 +8,7 @@ import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
+import androidx.media3.exoplayer.offline.Download
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
@@ -23,6 +24,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 
 data class PlaybackState(
     val connected: Boolean = false,
@@ -79,7 +81,10 @@ class PlaybackConnection(context: Context) {
     fun play(track: TrackSummary, replaceQueue: Boolean = false) {
         scope.launch {
             val quality = app.repository.settings.first().quality
-            val format = runCatching { app.repository.stream(track.video_id, quality).recommended_format?.format_id }.getOrNull()
+            val downloaded = withContext(Dispatchers.IO) {
+                runCatching { PlaybackManager.downloadManager.downloadIndex.getDownload(track.video_id)?.state == Download.STATE_COMPLETED }.getOrDefault(false)
+            }
+            val format = if (downloaded) null else runCatching { app.repository.stream(track.video_id, quality).recommended_format?.format_id }.getOrNull()
             val item = track.mediaItem(app, format)
             controller?.apply {
                 if (replaceQueue || mediaItemCount == 0) setMediaItem(item) else addMediaItem(item)
@@ -122,5 +127,5 @@ class PlaybackConnection(context: Context) {
 private fun TrackSummary.mediaItem(app: YtuneApplication, formatId: String? = null) = MediaItem.Builder()
     .setMediaId(video_id)
     .setUri(app.repository.playbackUrl(video_id, formatId))
-    .setMediaMetadata(MediaMetadata.Builder().setTitle(title).setArtist(artists.joinToString()).setArtworkUri((highest_resolution_thumbnail ?: thumbnail)?.let(android.net.Uri::parse)).build())
+    .setMediaMetadata(MediaMetadata.Builder().setTitle(title).setArtist(artists.joinToString()).setArtworkUri(ArtworkCache.displayUri(app, video_id, highest_resolution_thumbnail ?: thumbnail)).build())
     .build()

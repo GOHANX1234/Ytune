@@ -82,6 +82,6 @@ class PlaybackService : MediaSessionService() {
     private fun mediaItem(track: TrackEntity): MediaItem = MediaItem.Builder()
         .setMediaId(track.videoId)
         .setUri(app.repository.playbackUrl(track.videoId))
-        .setMediaMetadata(MediaMetadata.Builder().setTitle(track.title).setArtist(track.artist).setAlbumTitle(track.album).setArtworkUri(track.artworkUrl?.let(android.net.Uri::parse)).build())
+        .setMediaMetadata(MediaMetadata.Builder().setTitle(track.title).setArtist(track.artist).setAlbumTitle(track.album).setArtworkUri(ArtworkCache.displayUri(this, track.videoId, track.artworkUrl)).build())
         .build()
 }
