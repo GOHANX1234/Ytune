@@ -20,6 +20,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -41,6 +43,8 @@ class DownloadController(private val context: Context) {
     val pending: StateFlow<Set<String>> = _pending
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error
+    private val _progress = MutableStateFlow<Map<String, Float>>(emptyMap())
+    val progress: StateFlow<Map<String, Float>> = _progress
     private val listener = object : DownloadManager.Listener {
         override fun onDownloadChanged(manager: DownloadManager, download: Download, finalException: Exception?) {
             _pending.value = _pending.value - download.request.id
@@ -63,7 +67,28 @@ class DownloadController(private val context: Context) {
             scope.launch { app.repository.removeDownload(download.request.id) }
         }
     }
-    init { PlaybackManager.downloadManager.addListener(listener) }
+    init {
+        PlaybackManager.downloadManager.addListener(listener)
+        scope.launch {
+            while (isActive) {
+                val active = PlaybackManager.downloadManager.currentDownloads
+                _progress.value = active.associate { it.request.id to it.percentDownloaded.coerceAtLeast(0f) }
+                active.forEach { download ->
+                    val track = app.repository.localTrack(download.request.id)
+                    app.repository.saveDownload(DownloadEntity(
+                        videoId = download.request.id,
+                        title = track?.title.orEmpty(),
+                        artists = track?.artists.orEmpty(),
+                        artworkUrl = track?.artworkUrl,
+                        state = download.state,
+                        percent = download.percentDownloaded.coerceAtLeast(0f),
+                        bytesDownloaded = download.bytesDownloaded
+                    ))
+                }
+                delay(750)
+            }
+        }
+    }
 
     fun download(track: TrackSummary) {
         _pending.value = _pending.value + track.video_id

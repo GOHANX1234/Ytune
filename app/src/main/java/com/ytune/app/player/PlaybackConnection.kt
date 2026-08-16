@@ -29,7 +29,10 @@ data class PlaybackState(
     val durationMs: Long = 0,
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
     val shuffle: Boolean = false,
-    val queueSize: Int = 0
+    val queue: List<TrackSummary> = emptyList(),
+    val currentIndex: Int = -1,
+    val hasNext: Boolean = false,
+    val hasPrevious: Boolean = false
 )
 
 class PlaybackConnection(context: Context) {
@@ -83,6 +86,7 @@ class PlaybackConnection(context: Context) {
     fun next() { controller?.seekToNextMediaItem() }
     fun previous() { controller?.seekToPreviousMediaItem() }
     fun seek(position: Long) { controller?.seekTo(position) }
+    fun seekToItem(index: Int) { controller?.seekTo(index, 0); controller?.play() }
     fun toggleShuffle() { controller?.let { it.shuffleModeEnabled = !it.shuffleModeEnabled } }
     fun cycleRepeat() { controller?.let { it.repeatMode = (it.repeatMode + 1) % 3 } }
 
@@ -96,7 +100,13 @@ class PlaybackConnection(context: Context) {
             durationMs = player.duration.coerceAtLeast(0),
             repeatMode = player.repeatMode,
             shuffle = player.shuffleModeEnabled,
-            queueSize = player.mediaItemCount
+            queue = (0 until player.mediaItemCount).map { index ->
+                val item = player.getMediaItemAt(index)
+                TrackSummary(item.mediaId, item.mediaMetadata.title?.toString().orEmpty(), listOfNotNull(item.mediaMetadata.artist?.toString()), highest_resolution_thumbnail = item.mediaMetadata.artworkUri?.toString())
+            },
+            currentIndex = player.currentMediaItemIndex,
+            hasNext = player.hasNextMediaItem(),
+            hasPrevious = player.hasPreviousMediaItem()
         )
     }
 }

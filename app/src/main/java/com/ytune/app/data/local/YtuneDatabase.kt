@@ -27,6 +27,9 @@ data class HistoryEntity(@PrimaryKey(autoGenerate = true) val id: Long = 0, val 
 @Entity(tableName = "recent_discoveries", foreignKeys = [ForeignKey(TrackEntity::class, ["videoId"], ["videoId"], onDelete = ForeignKey.CASCADE)])
 data class RecentDiscoveryEntity(@PrimaryKey val videoId: String, val discoveredAt: Long = System.currentTimeMillis())
 
+@Entity(tableName = "search_history")
+data class SearchHistoryEntity(@PrimaryKey val query: String, val searchedAt: Long = System.currentTimeMillis())
+
 @Entity(tableName = "queue", primaryKeys = ["position"])
 data class QueueEntity(val position: Int, val videoId: String)
 
@@ -74,12 +77,16 @@ interface LibraryDao {
     @Query("DELETE FROM favorites WHERE videoId = :id") suspend fun unfavorite(id: String)
 
     @Insert suspend fun addHistory(value: HistoryEntity)
-    @Transaction @Query("SELECT * FROM history ORDER BY playedAt DESC LIMIT :limit") fun history(limit: Int = 100): Flow<List<HistoryTrack>>
+    @Transaction @Query("SELECT * FROM history WHERE id IN (SELECT MAX(id) FROM history GROUP BY videoId) ORDER BY playedAt DESC LIMIT :limit") fun history(limit: Int = 100): Flow<List<HistoryTrack>>
     @Query("DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY playedAt DESC LIMIT 500)") suspend fun trimHistory()
 
     @Transaction @Query("SELECT * FROM recent_discoveries ORDER BY discoveredAt DESC LIMIT 30") fun recentDiscoveries(): Flow<List<RecentDiscoveryTrack>>
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun addRecentDiscoveries(values: List<RecentDiscoveryEntity>)
     @Query("DELETE FROM recent_discoveries WHERE videoId NOT IN (SELECT videoId FROM recent_discoveries ORDER BY discoveredAt DESC LIMIT 30)") suspend fun trimRecentDiscoveries()
+
+    @Query("SELECT * FROM search_history ORDER BY searchedAt DESC LIMIT 20") fun searchHistory(): Flow<List<SearchHistoryEntity>>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun addSearch(value: SearchHistoryEntity)
+    @Query("DELETE FROM search_history") suspend fun clearSearchHistory()
 
     @Query("DELETE FROM queue") suspend fun clearQueue()
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertQueue(values: List<QueueEntity>)
@@ -99,8 +106,8 @@ interface LibraryDao {
 }
 
 @Database(
-    entities = [TrackEntity::class, FavoriteEntity::class, HistoryEntity::class, RecentDiscoveryEntity::class, QueueEntity::class, LocalPlaylistEntity::class, LocalPlaylistTrackEntity::class, DownloadEntity::class],
-    version = 2,
+    entities = [TrackEntity::class, FavoriteEntity::class, HistoryEntity::class, RecentDiscoveryEntity::class, SearchHistoryEntity::class, QueueEntity::class, LocalPlaylistEntity::class, LocalPlaylistTrackEntity::class, DownloadEntity::class],
+    version = 3,
     exportSchema = true
 )
 abstract class YtuneDatabase : RoomDatabase() {
@@ -112,6 +119,11 @@ abstract class YtuneDatabase : RoomDatabase() {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `recent_discoveries` (`videoId` TEXT NOT NULL, `discoveredAt` INTEGER NOT NULL, PRIMARY KEY(`videoId`), FOREIGN KEY(`videoId`) REFERENCES `tracks`(`videoId`) ON UPDATE NO ACTION ON DELETE CASCADE)")
             }
         }
-        fun create(context: Context): YtuneDatabase = Room.databaseBuilder(context, YtuneDatabase::class.java, "ytune.db").addMigrations(MIGRATION_1_2).build()
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `search_history` (`query` TEXT NOT NULL, `searchedAt` INTEGER NOT NULL, PRIMARY KEY(`query`))")
+            }
+        }
+        fun create(context: Context): YtuneDatabase = Room.databaseBuilder(context, YtuneDatabase::class.java, "ytune.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
     }
 }
