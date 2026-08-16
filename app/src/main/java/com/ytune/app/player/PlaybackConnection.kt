@@ -20,6 +20,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 data class PlaybackState(
     val connected: Boolean = false,
@@ -42,6 +45,7 @@ class PlaybackConnection(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val _state = MutableStateFlow(PlaybackState())
     val state: StateFlow<PlaybackState> = _state
+    private var positionJob: Job? = null
 
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) = publish(player)
@@ -55,6 +59,8 @@ class PlaybackConnection(context: Context) {
                     controller = mediaController
                     mediaController.addListener(listener)
                     publish(mediaController)
+                    positionJob?.cancel()
+                    positionJob = scope.launch { while (isActive) { delay(250); controller?.let(::publish) } }
                 }
             }, ContextCompat.getMainExecutor(app))
         }
@@ -65,6 +71,8 @@ class PlaybackConnection(context: Context) {
         future?.let { MediaController.releaseFuture(it) }
         future = null
         controller = null
+        positionJob?.cancel()
+        positionJob = null
         _state.value = PlaybackState()
     }
 

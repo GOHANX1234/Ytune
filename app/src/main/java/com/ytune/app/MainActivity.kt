@@ -16,15 +16,18 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -231,18 +234,35 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
     val scope = rememberCoroutineScope()
     var lyrics by remember(track.video_id) { mutableStateOf<String?>(null) }
     var showLyrics by remember { mutableStateOf(false) }
+    val syncedLines = remember(lyrics) { parseLrc(lyrics) }
+    val activeLyric = syncedLines.indexOfLast { it.timeMs <= state.positionMs }.coerceAtLeast(0)
+    val lyricListState = rememberLazyListState()
+    LaunchedEffect(activeLyric, showLyrics) { if (showLyrics && syncedLines.isNotEmpty()) lyricListState.animateScrollToItem(activeLyric.coerceAtLeast(0)) }
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 8.dp)) {
-        IconButton(close) { Icon(Icons.Default.ArrowBack, "Back") }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { IconButton(close) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }; Text("Now playing", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium); Icon(Icons.Default.GraphicEq, null, tint = MaterialTheme.colorScheme.primary) }
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-        AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.fillMaxWidth().aspectRatio(1f), contentScale = ContentScale.Crop)
-        Spacer(Modifier.height(20.dp)); Text(track.title, style = MaterialTheme.typography.headlineSmall); Text(track.artists.joinToString(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.fillMaxWidth().heightIn(max = 340.dp).aspectRatio(1f).clip(RoundedCornerShape(28.dp)), contentScale = ContentScale.Crop)
+        Spacer(Modifier.height(16.dp)); Text(track.title, style = MaterialTheme.typography.headlineSmall, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(track.artists.joinToString(), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Slider(value = state.positionMs.toFloat(), onValueChange = { connection.seek(it.toLong()) }, valueRange = 0f..state.durationMs.coerceAtLeast(1).toFloat())
+        Row(Modifier.fillMaxWidth()) { Text(formatTime(state.positionMs), style = MaterialTheme.typography.labelSmall); Spacer(Modifier.weight(1f)); Text(formatTime(state.durationMs), style = MaterialTheme.typography.labelSmall) }
         Row(verticalAlignment = Alignment.CenterVertically) { IconButton(connection::toggleShuffle) { Icon(Icons.Default.Shuffle, "Shuffle", tint = if (state.shuffle) MaterialTheme.colorScheme.primary else LocalContentColor.current) }; IconButton(connection::previous, enabled = state.hasPrevious) { Icon(Icons.Default.SkipPrevious, "Previous") }; FilledIconButton(connection::toggle) { Icon(if (state.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play") }; IconButton(connection::next, enabled = state.hasNext) { Icon(Icons.Default.SkipNext, "Next") }; IconButton(connection::cycleRepeat) { Icon(Icons.Default.Repeat, "Repeat", tint = if (state.repeatMode != 0) MaterialTheme.colorScheme.primary else LocalContentColor.current) } }
         TextButton({ showLyrics = !showLyrics; if (lyrics == null) scope.launch { lyrics = runCatching { app.repository.lyrics(track.video_id).lyrics?.let { it.synced_lyrics ?: it.plain_lyrics } }.getOrNull() ?: "Lyrics are not available." } }) { Icon(Icons.Default.Lyrics, null); Spacer(Modifier.width(8.dp)); Text("Lyrics") }
-        if (showLyrics) Text(lyrics ?: "Loading lyrics...", Modifier.fillMaxWidth().heightIn(max = 280.dp), style = MaterialTheme.typography.bodyLarge)
+        if (showLyrics) {
+            if (lyrics == null) CircularProgressIndicator(Modifier.size(24.dp))
+            else if (syncedLines.isNotEmpty()) LazyColumn(Modifier.fillMaxWidth().heightIn(max = 280.dp), state = lyricListState, contentPadding = PaddingValues(vertical = 8.dp)) { itemsIndexed(syncedLines) { index, line -> Text(line.text, Modifier.fillMaxWidth().clickable { connection.seek(line.timeMs) }.padding(vertical = 5.dp), style = if (index == activeLyric) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyLarge, color = if (index == activeLyric) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) } }
+            else Text(lyrics.orEmpty(), Modifier.fillMaxWidth().heightIn(max = 280.dp), style = MaterialTheme.typography.bodyLarge)
+        }
         }
         if (state.queue.isNotEmpty()) { Spacer(Modifier.height(12.dp)); Text("Up next", style = MaterialTheme.typography.titleMedium); LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) { itemsIndexed(state.queue) { index, item -> ListItem(modifier = Modifier.clickable { connection.seekToItem(index) }, headlineContent = { Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, supportingContent = { Text(item.artists.joinToString()) }, trailingContent = { if (index == state.currentIndex) Icon(Icons.Default.PlayArrow, "Playing") }) } } }
     }
 }
+
+private data class LrcLine(val timeMs: Long, val text: String)
+private fun formatTime(value: Long): String = "%d:%02d".format(value.coerceAtLeast(0) / 60_000, value.coerceAtLeast(0) / 1_000 % 60)
+private fun parseLrc(value: String?): List<LrcLine> = value.orEmpty().lineSequence().flatMap { raw ->
+    val match = Regex("\\[(\\d{1,2}):(\\d{2})(?:\\.(\\d{1,3}))?]\\s*(.*)").find(raw) ?: return@flatMap emptySequence()
+    val fraction = match.groupValues[3].padEnd(3, '0').take(3).toLongOrNull() ?: 0
+    sequenceOf(LrcLine((match.groupValues[1].toLong() * 60 + match.groupValues[2].toLong()) * 1000 + fraction, match.groupValues[4]))
+}.filter { it.text.isNotBlank() }.sortedBy { it.timeMs }.toList()
 
 private fun Destination.icon() = when (this) { Destination.Home -> Icons.Default.Home; Destination.Search -> Icons.Default.Search; Destination.Library -> Icons.Default.LibraryMusic; Destination.Downloads -> Icons.Default.Download }
