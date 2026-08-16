@@ -1,3 +1,5 @@
+@file:OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package com.ytune.app
 
 import android.os.Bundle
@@ -11,6 +13,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -172,7 +176,7 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
 
 @Composable private fun TrackRow(track: TrackSummary, play: (TrackSummary) -> Unit, favorite: () -> Unit, selected: Boolean, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit) {
     var menu by remember { mutableStateOf(false) }
-    ListItem(modifier = Modifier.clickable { play(track) }, leadingContent = { AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.size(56.dp), contentScale = ContentScale.Crop) }, headlineContent = { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, supportingContent = { Text(track.artists.joinToString().ifBlank { track.uploader ?: "YouTube Music" }, maxLines = 1, overflow = TextOverflow.Ellipsis) }, trailingContent = { Row { IconButton(favorite) { Icon(if (selected) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "Favorite") }; Box { IconButton({ menu = true }) { Icon(Icons.Default.MoreVert, "More") }; DropdownMenu(menu, { menu = false }) { DropdownMenuItem({ Text("Add to queue") }, { queue(track); menu = false }, leadingIcon = { Icon(Icons.Default.QueueMusic, null) }); DropdownMenuItem({ Text("Download") }, { download(track); menu = false }, leadingIcon = { Icon(Icons.Default.Download, null) }); playlists.forEach { list -> DropdownMenuItem({ Text("Add to ${list.name}") }, { addToPlaylist(list.id, track); menu = false }, leadingIcon = { Icon(Icons.Default.PlaylistAdd, null) }) } } } } })
+    ListItem(modifier = Modifier.clickable { play(track) }, leadingContent = { AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.size(56.dp), contentScale = ContentScale.Crop) }, headlineContent = { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, supportingContent = { Text(track.artists.joinToString().ifBlank { track.uploader ?: "YouTube Music" }, maxLines = 1, overflow = TextOverflow.Ellipsis) }, trailingContent = { Row { IconButton(favorite) { Icon(if (selected) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "Favorite") }; Box { IconButton({ menu = true }) { Icon(Icons.Default.MoreVert, "More") }; DropdownMenu(menu, { menu = false }) { DropdownMenuItem({ Text("Add to queue") }, { queue(track); menu = false }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) }); DropdownMenuItem({ Text("Download") }, { download(track); menu = false }, leadingIcon = { Icon(Icons.Default.Download, null) }); playlists.forEach { list -> DropdownMenuItem({ Text("Add to ${list.name}") }, { addToPlaylist(list.id, track); menu = false }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) }) } } } } })
 }
 
 @Composable private fun MiniPlayer(track: TrackSummary, playing: Boolean, toggle: () -> Unit, next: () -> Unit, expand: () -> Unit) {
