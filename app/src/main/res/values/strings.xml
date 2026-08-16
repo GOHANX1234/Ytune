@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Ytune</string>
+    <string name="downloads_description">Ytune offline downloads</string>
 </resources>

@@ -20,11 +20,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 
 private const val DOWNLOAD_CHANNEL = "ytune_downloads"
 private const val DOWNLOAD_NOTIFICATION = 2001
 
-class YtuneDownloadService : DownloadService(DOWNLOAD_NOTIFICATION, DEFAULT_FOREGROUND_NOTIFICATION_UPDATE_INTERVAL, DOWNLOAD_CHANNEL, R.string.app_name, 0) {
+class YtuneDownloadService : DownloadService(DOWNLOAD_NOTIFICATION, DEFAULT_FOREGROUND_NOTIFICATION_UPDATE_INTERVAL, DOWNLOAD_CHANNEL, R.string.app_name, R.string.downloads_description) {
     private val helper by lazy { DownloadNotificationHelper(this, DOWNLOAD_CHANNEL) }
     override fun getDownloadManager(): DownloadManager = PlaybackManager.downloadManager
     override fun getScheduler(): Scheduler? = null
@@ -35,8 +37,14 @@ class YtuneDownloadService : DownloadService(DOWNLOAD_NOTIFICATION, DEFAULT_FORE
 class DownloadController(private val context: Context) {
     private val app = context.applicationContext as YtuneApplication
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val _pending = MutableStateFlow<Set<String>>(emptySet())
+    val pending: StateFlow<Set<String>> = _pending
+    private val _error = MutableStateFlow<String?>(null)
+    val error: StateFlow<String?> = _error
     private val listener = object : DownloadManager.Listener {
         override fun onDownloadChanged(manager: DownloadManager, download: Download, finalException: Exception?) {
+            _pending.value = _pending.value - download.request.id
+            if (finalException != null) _error.value = finalException.message ?: "Download failed"
             scope.launch {
                 val track = app.repository.localTrack(download.request.id)
                 app.repository.saveDownload(DownloadEntity(
@@ -58,14 +66,20 @@ class DownloadController(private val context: Context) {
     init { PlaybackManager.downloadManager.addListener(listener) }
 
     fun download(track: TrackSummary) {
+        _pending.value = _pending.value + track.video_id
         scope.launch {
-            val wifiOnly = app.repository.playbackPreferences().downloadWifiOnly
-            PlaybackManager.downloadManager.requirements = Requirements(if (wifiOnly) Requirements.NETWORK_UNMETERED else Requirements.NETWORK)
-            app.repository.saveDownload(DownloadEntity(track.video_id, track.title, track.artists.joinToString("\u001f"), track.highest_resolution_thumbnail ?: track.thumbnail, Download.STATE_QUEUED))
-            val request = DownloadRequest.Builder(track.video_id, Uri.parse(app.repository.playbackUrl(track.video_id)))
-                .setData(track.title.toByteArray()).build()
-            DownloadService.sendAddDownload(context, YtuneDownloadService::class.java, request, false)
+            runCatching {
+                _error.value = null
+                PlaybackManager.downloadManager.requirements = Requirements(Requirements.NETWORK)
+                app.repository.saveDownload(DownloadEntity(track.video_id, track.title, track.artists.joinToString("\u001f"), track.highest_resolution_thumbnail ?: track.thumbnail, Download.STATE_QUEUED))
+                val request = DownloadRequest.Builder(track.video_id, Uri.parse(app.repository.playbackUrl(track.video_id)))
+                    .setData(track.title.toByteArray()).build()
+                DownloadService.sendAddDownload(context, YtuneDownloadService::class.java, request, true)
+            }.onFailure {
+                _pending.value = _pending.value - track.video_id
+                _error.value = it.message ?: "Unable to start download"
+            }
         }
     }
-    fun remove(videoId: String) { DownloadService.sendRemoveDownload(context, YtuneDownloadService::class.java, videoId, false) }
+    fun remove(videoId: String) { _error.value = null; DownloadService.sendRemoveDownload(context, YtuneDownloadService::class.java, videoId, true) }
 }

@@ -48,12 +48,17 @@ class YtuneRepository(
 
     val favorites: Flow<List<FavoriteTrack>> = dao.favorites()
     val history: Flow<List<HistoryTrack>> = dao.history()
+    val recentDiscoveries: Flow<List<RecentDiscoveryTrack>> = dao.recentDiscoveries()
     val playlists: Flow<List<LocalPlaylistEntity>> = dao.playlists()
     val downloads: Flow<List<DownloadEntity>> = dao.downloads()
     val settings: Flow<PlaybackPreferences> = preferences.playback
 
     suspend fun search(query: String, limit: Int = 25): SearchResponse = apiCall {
-        api.search(query.trim(), limit).also { response -> dao.upsertTracks(response.results.map { it.toEntity() }) }
+        api.search(query.trim(), limit).also { response ->
+            dao.upsertTracks(response.results.map { it.toEntity() })
+            dao.addRecentDiscoveries(response.results.map { RecentDiscoveryEntity(it.video_id) })
+            dao.trimRecentDiscoveries()
+        }
     }
 
     suspend fun track(id: String): TrackEnvelope = apiCall {

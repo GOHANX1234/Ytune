@@ -9,7 +9,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -51,6 +53,7 @@ class YtuneViewModel(application: android.app.Application) : AndroidViewModel(ap
     val repository = app.repository
     val favorites = repository.favorites
     val history = repository.history
+    val recentDiscoveries = repository.recentDiscoveries
     val playlists = repository.playlists
     val downloads = repository.downloads
     val settings = repository.settings
@@ -83,6 +86,7 @@ class YtuneViewModel(application: android.app.Application) : AndroidViewModel(ap
 }
 
 private enum class Destination { Home, Search, Library, Downloads }
+private val LocalPendingDownloads = compositionLocalOf<Set<String>> { emptySet() }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -98,10 +102,17 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
     val destination = remember { mutableStateOf(Destination.Home) }
     var showPlayer by remember { mutableStateOf(false) }
     val downloader = remember { DownloadController(context) }
+    val pendingDownloads by downloader.pending.collectAsStateWithLifecycle()
+    val downloadError by downloader.error.collectAsStateWithLifecycle()
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(downloadError) { downloadError?.let { snackbar.showSnackbar(it) } }
+    LaunchedEffect(vm.error) { vm.error?.let { snackbar.showSnackbar(it) } }
     DisposableEffect(connection) { connection.connect(); onDispose { connection.disconnect() } }
     fun play(track: TrackSummary) { connection.play(track, replaceQueue = true); vm.recordPlayed(track) }
 
     Scaffold(
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
             Column {
                 playback.current?.let { MiniPlayer(it, playback.playing, connection::toggle, connection::next) { showPlayer = true } }
@@ -113,15 +124,16 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
             }
         }
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when (destination.value) {
-                Destination.Home -> HomeScreen(vm, { destination.value = Destination.Search; vm.search(it) }, ::play, downloader::download, connection::addToQueue, playlists, vm::addToPlaylist)
-                Destination.Search -> SearchScreen(vm, ::play, { vm.toggleFavorite(it) }, favorites.map { it.track.videoId }.toSet(), downloader::download, connection::addToQueue, playlists, vm::addToPlaylist)
-                Destination.Library -> LibraryScreen(favorites, history, playlists, settings, vm::setQuality, vm::setWifiOnly, vm::createPlaylist, ::play, { vm.toggleFavorite(it) }, downloader::download, connection::addToQueue, vm::addToPlaylist)
-                Destination.Downloads -> DownloadsScreen(downloads, history, ::play, downloader)
+        CompositionLocalProvider(LocalPendingDownloads provides pendingDownloads) {
+            Box(Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.background)) {
+                when (destination.value) {
+                    Destination.Home -> HomeScreen(vm, { destination.value = Destination.Search; vm.search(it) }, ::play, downloader::download, connection::addToQueue, playlists, vm::addToPlaylist)
+                    Destination.Search -> SearchScreen(vm, ::play, { vm.toggleFavorite(it) }, favorites.map { it.track.videoId }.toSet(), downloader::download, connection::addToQueue, playlists, vm::addToPlaylist)
+                    Destination.Library -> LibraryScreen(favorites, history, playlists, settings, vm::setQuality, vm::createPlaylist, ::play, { vm.toggleFavorite(it) }, downloader::download, connection::addToQueue, vm::addToPlaylist)
+                    Destination.Downloads -> DownloadsScreen(downloads, ::play, downloader)
+                }
+                if (vm.loading) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
             }
-            if (vm.loading) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
-            vm.error?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.align(Alignment.TopCenter).padding(12.dp)) }
         }
     }
     if (showPlayer) ModalBottomSheet(onDismissRequest = { showPlayer = false }) { FullPlayer(playback, connection) }
@@ -129,24 +141,25 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
 
 @Composable private fun HomeScreen(vm: YtuneViewModel, search: (String) -> Unit, play: (TrackSummary) -> Unit, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit) {
     val remotePlaylist by vm.playlist.collectAsStateWithLifecycle()
-    LazyColumn(Modifier.fillMaxSize().statusBarsPadding(), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        item { Text("Ytune", style = MaterialTheme.typography.displaySmall); Text("Your music, kept on your device", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        item { OutlinedTextField(vm.query, { vm.query = it }, Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Search songs, artists, or playlist links") }, trailingIcon = { IconButton({ search(vm.query) }) { Icon(Icons.Default.Search, "Search") } }) }
+    val recent by vm.recentDiscoveries.collectAsStateWithLifecycle(emptyList())
+    LazyColumn(Modifier.fillMaxSize().statusBarsPadding(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        item { Text("Ytune", style = MaterialTheme.typography.headlineLarge); Text("Everything you love, right here", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item { OutlinedTextField(vm.query, { vm.query = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(18.dp), placeholder = { Text("Songs, artists, or playlist links") }, trailingIcon = { if (vm.loading) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp) else IconButton({ search(vm.query) }) { Icon(Icons.Default.Search, "Search") } }) }
         item { Text("Quick starts", style = MaterialTheme.typography.titleLarge); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("Top hits", "Chill", "Workout", "Focus").forEach { SuggestionChip({ search(it) }, label = { Text(it) }) } } }
         remotePlaylist?.let { loaded -> item { Text(loaded.playlist.title, style = MaterialTheme.typography.titleLarge); Text("${loaded.tracks.size} tracks", color = MaterialTheme.colorScheme.onSurfaceVariant) }; items(loaded.tracks) { item -> val track = TrackSummary(item.video_id, item.title, listOfNotNull(item.uploader), duration_seconds = item.duration_seconds, thumbnail = item.thumbnail); TrackRow(track, play, {}, false, download, queue, playlists, addToPlaylist) } }
-        if (vm.results.isNotEmpty()) { item { Text("Recently discovered", style = MaterialTheme.typography.titleLarge) }; items(vm.results.take(8)) { TrackRow(it, play, {}, false, download, queue, playlists, addToPlaylist) } }
+        if (recent.isNotEmpty()) { item { Text("Recently discovered", style = MaterialTheme.typography.titleLarge) }; items(recent.take(12), key = { it.track.videoId }) { TrackRow(it.track.toSummary(), play, {}, false, download, queue, playlists, addToPlaylist) } }
     }
 }
 
 @Composable private fun SearchScreen(vm: YtuneViewModel, play: (TrackSummary) -> Unit, favorite: (TrackSummary) -> Unit, selected: Set<String>, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit) {
-    Column(Modifier.fillMaxSize().statusBarsPadding().padding(16.dp)) {
+    Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp, vertical = 12.dp)) {
         Text("Search", style = MaterialTheme.typography.headlineLarge)
-        OutlinedTextField(vm.query, { vm.query = it }, Modifier.fillMaxWidth(), singleLine = true, trailingIcon = { IconButton({ vm.search() }) { Icon(Icons.Default.Search, "Search") } })
-        LazyColumn { items(vm.results) { TrackRow(it, play, { favorite(it) }, it.video_id in selected, download, queue, playlists, addToPlaylist) } }
+        OutlinedTextField(vm.query, { vm.query = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(18.dp), trailingIcon = { if (vm.loading) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp) else IconButton({ vm.search() }) { Icon(Icons.Default.Search, "Search") } })
+        Spacer(Modifier.height(10.dp)); LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) { items(vm.results, key = { it.video_id }) { TrackRow(it, play, { favorite(it) }, it.video_id in selected, download, queue, playlists, addToPlaylist) } }
     }
 }
 
-@Composable private fun LibraryScreen(favorites: List<FavoriteTrack>, history: List<HistoryTrack>, playlists: List<LocalPlaylistEntity>, settings: PlaybackPreferences, setQuality: (String) -> Unit, setWifiOnly: (Boolean) -> Unit, createPlaylist: (String) -> Unit, play: (TrackSummary) -> Unit, remove: (TrackSummary) -> Unit, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, addToPlaylist: (String, TrackSummary) -> Unit) {
+@Composable private fun LibraryScreen(favorites: List<FavoriteTrack>, history: List<HistoryTrack>, playlists: List<LocalPlaylistEntity>, settings: PlaybackPreferences, setQuality: (String) -> Unit, createPlaylist: (String) -> Unit, play: (TrackSummary) -> Unit, remove: (TrackSummary) -> Unit, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, addToPlaylist: (String, TrackSummary) -> Unit) {
     var showCreate by remember { mutableStateOf(false) }; var showSettings by remember { mutableStateOf(false) }; var name by remember { mutableStateOf("") }
     LazyColumn(Modifier.fillMaxSize().statusBarsPadding().padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { Row(verticalAlignment = Alignment.CenterVertically) { Text("Your Library", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f)); IconButton({ showSettings = true }) { Icon(Icons.Default.Settings, "Settings") } } }
@@ -159,10 +172,10 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
         items(history.filter { it.track != null }.take(20)) { TrackRow(it.track!!.toSummary(), play, {}, false, download, queue, playlists, addToPlaylist) }
     }
     if (showCreate) AlertDialog(onDismissRequest = { showCreate = false }, title = { Text("New playlist") }, text = { OutlinedTextField(name, { name = it }, label = { Text("Name") }) }, confirmButton = { TextButton({ createPlaylist(name); name = ""; showCreate = false }) { Text("Create") } }, dismissButton = { TextButton({ showCreate = false }) { Text("Cancel") } })
-    if (showSettings) AlertDialog(onDismissRequest = { showSettings = false }, title = { Text("Settings") }, text = { Column { Text("Streaming quality"); SingleChoiceSegmentedButtonRow { listOf("low", "medium", "best").forEachIndexed { index, value -> SegmentedButton(selected = settings.quality == value, onClick = { setQuality(value) }, shape = SegmentedButtonDefaults.itemShape(index, 3)) { Text(value.replaceFirstChar { it.uppercase() }) } } }; Row(verticalAlignment = Alignment.CenterVertically) { Text("Download on Wi-Fi only", Modifier.weight(1f)); Switch(settings.downloadWifiOnly, setWifiOnly) } } }, confirmButton = { TextButton({ showSettings = false }) { Text("Done") } })
+    if (showSettings) AlertDialog(onDismissRequest = { showSettings = false }, title = { Text("Settings") }, text = { Column { Text("Streaming quality"); SingleChoiceSegmentedButtonRow { listOf("low", "medium", "best").forEachIndexed { index, value -> SegmentedButton(selected = settings.quality == value, onClick = { setQuality(value) }, shape = SegmentedButtonDefaults.itemShape(index, 3)) { Text(value.replaceFirstChar { it.uppercase() }) } } }; Spacer(Modifier.height(12.dp)); Text("Downloads use any available network.", color = MaterialTheme.colorScheme.onSurfaceVariant) } }, confirmButton = { TextButton({ showSettings = false }) { Text("Done") } })
 }
 
-@Composable private fun DownloadsScreen(downloads: List<DownloadEntity>, history: List<HistoryTrack>, play: (TrackSummary) -> Unit, downloader: DownloadController) {
+@Composable private fun DownloadsScreen(downloads: List<DownloadEntity>, play: (TrackSummary) -> Unit, downloader: DownloadController) {
     Column(Modifier.fillMaxSize().statusBarsPadding().padding(20.dp)) {
         Text("Downloads", style = MaterialTheme.typography.headlineLarge)
         Spacer(Modifier.height(12.dp))
@@ -176,7 +189,8 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
 
 @Composable private fun TrackRow(track: TrackSummary, play: (TrackSummary) -> Unit, favorite: () -> Unit, selected: Boolean, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit) {
     var menu by remember { mutableStateOf(false) }
-    ListItem(modifier = Modifier.clickable { play(track) }, leadingContent = { AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.size(56.dp), contentScale = ContentScale.Crop) }, headlineContent = { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, supportingContent = { Text(track.artists.joinToString().ifBlank { track.uploader ?: "YouTube Music" }, maxLines = 1, overflow = TextOverflow.Ellipsis) }, trailingContent = { Row { IconButton(favorite) { Icon(if (selected) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "Favorite") }; Box { IconButton({ menu = true }) { Icon(Icons.Default.MoreVert, "More") }; DropdownMenu(menu, { menu = false }) { DropdownMenuItem({ Text("Add to queue") }, { queue(track); menu = false }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) }); DropdownMenuItem({ Text("Download") }, { download(track); menu = false }, leadingIcon = { Icon(Icons.Default.Download, null) }); playlists.forEach { list -> DropdownMenuItem({ Text("Add to ${list.name}") }, { addToPlaylist(list.id, track); menu = false }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) }) } } } } })
+    val downloading = track.video_id in LocalPendingDownloads.current
+    Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) { ListItem(modifier = Modifier.clickable { play(track) }, colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer), leadingContent = { AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.size(58.dp), contentScale = ContentScale.Crop) }, headlineContent = { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, supportingContent = { Text(track.artists.joinToString().ifBlank { track.uploader ?: "YouTube Music" }, maxLines = 1, overflow = TextOverflow.Ellipsis) }, trailingContent = { Row { IconButton(favorite) { Icon(if (selected) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "Favorite") }; Box { if (downloading) CircularProgressIndicator(Modifier.size(24.dp).align(Alignment.Center), strokeWidth = 2.dp) else IconButton({ menu = true }) { Icon(Icons.Default.MoreVert, "More") }; DropdownMenu(menu, { menu = false }) { DropdownMenuItem({ Text("Add to queue") }, { queue(track); menu = false }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) }); DropdownMenuItem({ Text(if (downloading) "Starting download…" else "Download") }, { if (!downloading) download(track); menu = false }, enabled = !downloading, leadingIcon = { if (downloading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Download, null) }); playlists.forEach { list -> DropdownMenuItem({ Text("Add to ${list.name}") }, { addToPlaylist(list.id, track); menu = false }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) }) } } } } }) }
 }
 
 @Composable private fun MiniPlayer(track: TrackSummary, playing: Boolean, toggle: () -> Unit, next: () -> Unit, expand: () -> Unit) {

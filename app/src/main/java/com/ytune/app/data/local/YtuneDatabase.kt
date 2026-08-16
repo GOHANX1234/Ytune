@@ -2,6 +2,8 @@ package com.ytune.app.data.local
 
 import android.content.Context
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "tracks")
@@ -21,6 +23,9 @@ data class FavoriteEntity(@PrimaryKey val videoId: String, val addedAt: Long = S
 
 @Entity(tableName = "history", indices = [Index("videoId")])
 data class HistoryEntity(@PrimaryKey(autoGenerate = true) val id: Long = 0, val videoId: String, val playedAt: Long = System.currentTimeMillis())
+
+@Entity(tableName = "recent_discoveries", foreignKeys = [ForeignKey(TrackEntity::class, ["videoId"], ["videoId"], onDelete = ForeignKey.CASCADE)])
+data class RecentDiscoveryEntity(@PrimaryKey val videoId: String, val discoveredAt: Long = System.currentTimeMillis())
 
 @Entity(tableName = "queue", primaryKeys = ["position"])
 data class QueueEntity(val position: Int, val videoId: String)
@@ -54,6 +59,7 @@ data class DownloadEntity(
 
 data class FavoriteTrack(@Embedded val favorite: FavoriteEntity, @Relation(parentColumn = "videoId", entityColumn = "videoId") val track: TrackEntity)
 data class HistoryTrack(@Embedded val history: HistoryEntity, @Relation(parentColumn = "videoId", entityColumn = "videoId") val track: TrackEntity?)
+data class RecentDiscoveryTrack(@Embedded val discovery: RecentDiscoveryEntity, @Relation(parentColumn = "videoId", entityColumn = "videoId") val track: TrackEntity)
 data class QueueTrack(@Embedded val queue: QueueEntity, @Relation(parentColumn = "videoId", entityColumn = "videoId") val track: TrackEntity?)
 
 @Dao
@@ -70,6 +76,10 @@ interface LibraryDao {
     @Insert suspend fun addHistory(value: HistoryEntity)
     @Transaction @Query("SELECT * FROM history ORDER BY playedAt DESC LIMIT :limit") fun history(limit: Int = 100): Flow<List<HistoryTrack>>
     @Query("DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY playedAt DESC LIMIT 500)") suspend fun trimHistory()
+
+    @Transaction @Query("SELECT * FROM recent_discoveries ORDER BY discoveredAt DESC LIMIT 30") fun recentDiscoveries(): Flow<List<RecentDiscoveryTrack>>
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun addRecentDiscoveries(values: List<RecentDiscoveryEntity>)
+    @Query("DELETE FROM recent_discoveries WHERE videoId NOT IN (SELECT videoId FROM recent_discoveries ORDER BY discoveredAt DESC LIMIT 30)") suspend fun trimRecentDiscoveries()
 
     @Query("DELETE FROM queue") suspend fun clearQueue()
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun insertQueue(values: List<QueueEntity>)
@@ -89,14 +99,19 @@ interface LibraryDao {
 }
 
 @Database(
-    entities = [TrackEntity::class, FavoriteEntity::class, HistoryEntity::class, QueueEntity::class, LocalPlaylistEntity::class, LocalPlaylistTrackEntity::class, DownloadEntity::class],
-    version = 1,
+    entities = [TrackEntity::class, FavoriteEntity::class, HistoryEntity::class, RecentDiscoveryEntity::class, QueueEntity::class, LocalPlaylistEntity::class, LocalPlaylistTrackEntity::class, DownloadEntity::class],
+    version = 2,
     exportSchema = true
 )
 abstract class YtuneDatabase : RoomDatabase() {
     abstract fun libraryDao(): LibraryDao
 
     companion object {
-        fun create(context: Context): YtuneDatabase = Room.databaseBuilder(context, YtuneDatabase::class.java, "ytune.db").build()
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `recent_discoveries` (`videoId` TEXT NOT NULL, `discoveredAt` INTEGER NOT NULL, PRIMARY KEY(`videoId`), FOREIGN KEY(`videoId`) REFERENCES `tracks`(`videoId`) ON UPDATE NO ACTION ON DELETE CASCADE)")
+            }
+        }
+        fun create(context: Context): YtuneDatabase = Room.databaseBuilder(context, YtuneDatabase::class.java, "ytune.db").addMigrations(MIGRATION_1_2).build()
     }
 }
