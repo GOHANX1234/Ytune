@@ -5,9 +5,13 @@ package com.ytune.app
 import android.os.Bundle
 import android.os.Build
 import android.Manifest
+import android.animation.AnimatorSet
+import android.animation.ObjectAnimator
+import android.view.animation.DecelerateInterpolator
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -49,7 +53,24 @@ import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
+        splash.setOnExitAnimationListener { provider ->
+            val icon = provider.iconView
+            AnimatorSet().apply {
+                playTogether(
+                    ObjectAnimator.ofFloat(icon, android.view.View.SCALE_X, 1f, 1.08f, 0.92f),
+                    ObjectAnimator.ofFloat(icon, android.view.View.SCALE_Y, 1f, 1.08f, 0.92f),
+                    ObjectAnimator.ofFloat(provider.view, android.view.View.ALPHA, 1f, 0f)
+                )
+                duration = 360
+                interpolator = DecelerateInterpolator()
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) = provider.remove()
+                })
+                start()
+            }
+        }
         enableEdgeToEdge()
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 10)
         setContent { YtuneTheme { YtuneApp() } }
