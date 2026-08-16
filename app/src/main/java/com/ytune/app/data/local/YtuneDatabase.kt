@@ -60,6 +60,18 @@ data class DownloadEntity(
     val updatedAt: Long = System.currentTimeMillis()
 )
 
+@Entity(tableName = "cached_lyrics")
+data class CachedLyricsEntity(
+    @PrimaryKey val videoId: String,
+    val found: Boolean = false,
+    val instrumental: Boolean = false,
+    val syncedLyrics: String? = null,
+    val plainLyrics: String? = null,
+    val preferredType: String? = null,
+    val matchConfidence: String? = null,
+    val cachedAt: Long = System.currentTimeMillis()
+)
+
 data class FavoriteTrack(@Embedded val favorite: FavoriteEntity, @Relation(parentColumn = "videoId", entityColumn = "videoId") val track: TrackEntity)
 data class HistoryTrack(@Embedded val history: HistoryEntity, @Relation(parentColumn = "videoId", entityColumn = "videoId") val track: TrackEntity?)
 data class RecentDiscoveryTrack(@Embedded val discovery: RecentDiscoveryEntity, @Relation(parentColumn = "videoId", entityColumn = "videoId") val track: TrackEntity)
@@ -103,11 +115,15 @@ interface LibraryDao {
     @Query("SELECT * FROM downloads ORDER BY updatedAt DESC") fun downloads(): Flow<List<DownloadEntity>>
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertDownload(value: DownloadEntity)
     @Query("DELETE FROM downloads WHERE videoId = :id") suspend fun removeDownload(id: String)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertCachedLyrics(value: CachedLyricsEntity)
+    @Query("SELECT * FROM cached_lyrics WHERE videoId = :id") suspend fun cachedLyrics(id: String): CachedLyricsEntity?
+    @Query("DELETE FROM cached_lyrics WHERE videoId = :id") suspend fun removeCachedLyrics(id: String)
 }
 
 @Database(
-    entities = [TrackEntity::class, FavoriteEntity::class, HistoryEntity::class, RecentDiscoveryEntity::class, SearchHistoryEntity::class, QueueEntity::class, LocalPlaylistEntity::class, LocalPlaylistTrackEntity::class, DownloadEntity::class],
-    version = 3,
+    entities = [TrackEntity::class, FavoriteEntity::class, HistoryEntity::class, RecentDiscoveryEntity::class, SearchHistoryEntity::class, QueueEntity::class, LocalPlaylistEntity::class, LocalPlaylistTrackEntity::class, DownloadEntity::class, CachedLyricsEntity::class],
+    version = 4,
     exportSchema = true
 )
 abstract class YtuneDatabase : RoomDatabase() {
@@ -124,6 +140,11 @@ abstract class YtuneDatabase : RoomDatabase() {
                 db.execSQL("CREATE TABLE IF NOT EXISTS `search_history` (`query` TEXT NOT NULL, `searchedAt` INTEGER NOT NULL, PRIMARY KEY(`query`))")
             }
         }
-        fun create(context: Context): YtuneDatabase = Room.databaseBuilder(context, YtuneDatabase::class.java, "ytune.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS `cached_lyrics` (`videoId` TEXT NOT NULL, `found` INTEGER NOT NULL DEFAULT 0, `instrumental` INTEGER NOT NULL DEFAULT 0, `syncedLyrics` TEXT, `plainLyrics` TEXT, `preferredType` TEXT, `matchConfidence` TEXT, `cachedAt` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`videoId`))")
+            }
+        }
+        fun create(context: Context): YtuneDatabase = Room.databaseBuilder(context, YtuneDatabase::class.java, "ytune.db").addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
     }
 }

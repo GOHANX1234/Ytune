@@ -360,7 +360,14 @@ private fun PlaylistDetailScreen(playlist: LocalPlaylistEntity, tracks: List<Tra
     LaunchedEffect(pager.currentPage, track.video_id) {
         if (pager.currentPage == 1 && lyrics == null && !lyricsLoading) {
             lyricsLoading = true
-            lyrics = runCatching { app.repository.lyrics(track.video_id).lyrics?.let { it.synced_lyrics ?: it.plain_lyrics } }.getOrNull() ?: "Lyrics are not available."
+            lyrics = runCatching {
+                val cached = app.repository.cachedLyrics(track.video_id)
+                if (cached != null && cached.found) {
+                    cached.syncedLyrics ?: cached.plainLyrics
+                } else {
+                    app.repository.lyrics(track.video_id).lyrics?.let { it.synced_lyrics ?: it.plain_lyrics }
+                }
+            }.getOrNull() ?: "Lyrics are not available."
             lyricsLoading = false
         }
     }

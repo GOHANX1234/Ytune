@@ -120,6 +120,23 @@ class YtuneRepository(
     suspend fun saveQueue(ids: List<String>) { dao.clearQueue(); dao.insertQueue(ids.mapIndexed { index, id -> QueueEntity(index, id) }) }
     suspend fun saveDownload(value: DownloadEntity) = dao.upsertDownload(value)
     suspend fun removeDownload(id: String) = dao.removeDownload(id)
+    suspend fun cacheLyrics(videoId: String) {
+        runCatching {
+            val envelope = lyrics(videoId)
+            val l = envelope.lyrics ?: return
+            dao.upsertCachedLyrics(CachedLyricsEntity(
+                videoId = videoId,
+                found = l.found,
+                instrumental = l.instrumental,
+                syncedLyrics = l.synced_lyrics,
+                plainLyrics = l.plain_lyrics,
+                preferredType = l.preferred_type,
+                matchConfidence = l.match_confidence
+            ))
+        }
+    }
+    suspend fun cachedLyrics(videoId: String): CachedLyricsEntity? = dao.cachedLyrics(videoId)
+    suspend fun removeCachedLyrics(videoId: String) = dao.removeCachedLyrics(videoId)
     suspend fun playbackPreferences(): PlaybackPreferences = preferences.playback.first()
     suspend fun savePlayback(videoId: String?, positionMs: Long, index: Int, repeatMode: Int, shuffle: Boolean) = preferences.savePlayback(videoId, positionMs, index, repeatMode, shuffle)
     suspend fun setQuality(value: String) = preferences.setQuality(value)

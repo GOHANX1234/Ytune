@@ -63,10 +63,16 @@ class DownloadController(private val context: Context) {
                     bytesDownloaded = download.bytesDownloaded,
                     error = finalException?.message
                 ))
+                if (download.state == Download.STATE_COMPLETED) {
+                    app.repository.cacheLyrics(download.request.id)
+                }
             }
         }
         override fun onDownloadRemoved(manager: DownloadManager, download: Download) {
-            scope.launch { app.repository.removeDownload(download.request.id) }
+            scope.launch {
+                app.repository.removeDownload(download.request.id)
+                app.repository.removeCachedLyrics(download.request.id)
+            }
         }
     }
     init {
