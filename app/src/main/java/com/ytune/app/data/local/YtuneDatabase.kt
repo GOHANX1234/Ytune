@@ -67,8 +67,8 @@ data class QueueTrack(@Embedded val queue: QueueEntity, @Relation(parentColumn =
 
 @Dao
 interface LibraryDao {
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertTrack(track: TrackEntity)
-    @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsertTracks(tracks: List<TrackEntity>)
+    @Upsert suspend fun upsertTrack(track: TrackEntity)
+    @Upsert suspend fun upsertTracks(tracks: List<TrackEntity>)
     @Query("SELECT * FROM tracks WHERE videoId = :id") suspend fun track(id: String): TrackEntity?
 
     @Transaction @Query("SELECT * FROM favorites ORDER BY addedAt DESC") fun favorites(): Flow<List<FavoriteTrack>>

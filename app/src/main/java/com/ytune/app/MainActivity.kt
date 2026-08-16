@@ -179,7 +179,7 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
                 if (showPlayer) {
                     FullPlayer(playback, connection) { showPlayer = false }
                 } else when (destination.value) {
-                    Destination.Home -> HomeScreen(vm, { destination.value = Destination.Search; vm.search(it) }, ::play, downloader::download, connection::addToQueue, playlists, vm::addToPlaylist)
+                    Destination.Home -> HomeScreen(vm, { destination.value = Destination.Search; vm.search(it) }, ::play, { vm.toggleFavorite(it) }, favorites.map { it.track.videoId }.toSet(), downloader::download, connection::addToQueue, playlists, vm::addToPlaylist)
                     Destination.Search -> SearchScreen(vm, ::play, { vm.toggleFavorite(it) }, favorites.map { it.track.videoId }.toSet(), downloader::download, connection::addToQueue, playlists, vm::addToPlaylist)
                     Destination.Library -> LibraryScreen(favorites, history, playlists, settings, vm::setQuality, vm::createPlaylist, ::play, { vm.toggleFavorite(it) }, downloader::download, connection::addToQueue, vm::addToPlaylist, vm::playlistTracks, vm::removeFromPlaylist, vm::deletePlaylist)
                     Destination.Downloads -> DownloadsScreen(downloads, downloadProgress, ::play, downloader)
@@ -190,15 +190,15 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
     }
 }
 
-@Composable private fun HomeScreen(vm: YtuneViewModel, search: (String) -> Unit, play: (TrackSummary) -> Unit, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit) {
+@Composable private fun HomeScreen(vm: YtuneViewModel, search: (String) -> Unit, play: (TrackSummary) -> Unit, favorite: (TrackSummary) -> Unit, selected: Set<String>, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit) {
     val remotePlaylist by vm.playlist.collectAsStateWithLifecycle()
     val recent by vm.recentDiscoveries.collectAsStateWithLifecycle(emptyList())
     LazyColumn(Modifier.fillMaxSize().statusBarsPadding(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { Text("Ytune", style = MaterialTheme.typography.headlineLarge); Text("Everything you love, right here", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         item { OutlinedTextField(vm.query, { vm.query = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(18.dp), placeholder = { Text("Songs, artists, or playlist links") }, trailingIcon = { if (vm.loading) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp) else IconButton({ search(vm.query) }) { Icon(Icons.Default.Search, "Search") } }) }
         item { Text("Quick starts", style = MaterialTheme.typography.titleLarge); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("Top hits", "Chill", "Workout", "Focus").forEach { SuggestionChip({ search(it) }, label = { Text(it) }) } } }
-        remotePlaylist?.let { loaded -> item { Text(loaded.playlist.title, style = MaterialTheme.typography.titleLarge); Text("${loaded.tracks.size} tracks", color = MaterialTheme.colorScheme.onSurfaceVariant) }; items(loaded.tracks) { item -> val track = TrackSummary(item.video_id, item.title, listOfNotNull(item.uploader), duration_seconds = item.duration_seconds, thumbnail = item.thumbnail); TrackRow(track, play, {}, false, download, queue, playlists, addToPlaylist) } }
-        if (recent.isNotEmpty()) { item { Text("Recently discovered", style = MaterialTheme.typography.titleLarge) }; items(recent.take(12), key = { it.track.videoId }) { TrackRow(it.track.toSummary(), play, {}, false, download, queue, playlists, addToPlaylist) } }
+        remotePlaylist?.let { loaded -> item { Text(loaded.playlist.title, style = MaterialTheme.typography.titleLarge); Text("${loaded.tracks.size} tracks", color = MaterialTheme.colorScheme.onSurfaceVariant) }; items(loaded.tracks) { item -> val track = TrackSummary(item.video_id, item.title, listOfNotNull(item.uploader), duration_seconds = item.duration_seconds, thumbnail = item.thumbnail); TrackRow(track, play, { favorite(track) }, track.video_id in selected, download, queue, playlists, addToPlaylist) } }
+        if (recent.isNotEmpty()) { item { Text("Recently discovered", style = MaterialTheme.typography.titleLarge) }; items(recent.take(12), key = { it.track.videoId }) { val track = it.track.toSummary(); TrackRow(track, play, { favorite(track) }, track.video_id in selected, download, queue, playlists, addToPlaylist) } }
     }
 }
 
@@ -216,12 +216,13 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LibraryScreen(favorites: List<FavoriteTrack>, history: List<HistoryTrack>, playlists: List<LocalPlaylistEntity>, settings: PlaybackPreferences, setQuality: (String) -> Unit, createPlaylist: (String) -> Unit, play: (TrackSummary) -> Unit, remove: (TrackSummary) -> Unit, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, addToPlaylist: (String, TrackSummary) -> Unit, playlistTracks: (String) -> Flow<List<TrackEntity>>, removeFromPlaylist: (String, String) -> Unit, deletePlaylist: (String) -> Unit) {
+private fun LibraryScreen(favorites: List<FavoriteTrack>, history: List<HistoryTrack>, playlists: List<LocalPlaylistEntity>, settings: PlaybackPreferences, setQuality: (String) -> Unit, createPlaylist: (String) -> Unit, play: (TrackSummary) -> Unit, favorite: (TrackSummary) -> Unit, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, addToPlaylist: (String, TrackSummary) -> Unit, playlistTracks: (String) -> Flow<List<TrackEntity>>, removeFromPlaylist: (String, String) -> Unit, deletePlaylist: (String) -> Unit) {
     var showCreate by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var selectedPlaylistId by remember { mutableStateOf<String?>(null) }
     val selectedPlaylist = playlists.firstOrNull { it.id == selectedPlaylistId }
+    val favoriteIds = favorites.map { it.track.videoId }.toSet()
 
     if (selectedPlaylist != null) {
         val tracksFlow = remember(selectedPlaylist.id) { playlistTracks(selectedPlaylist.id) }
@@ -231,6 +232,8 @@ private fun LibraryScreen(favorites: List<FavoriteTrack>, history: List<HistoryT
             playlist = selectedPlaylist,
             tracks = tracks,
             play = play,
+            favorite = favorite,
+            selected = favoriteIds,
             download = download,
             queue = queue,
             playlists = playlists,
@@ -258,9 +261,9 @@ private fun LibraryScreen(favorites: List<FavoriteTrack>, history: List<HistoryT
         }
         item { Text("Favorites", style = MaterialTheme.typography.titleLarge) }
         if (favorites.isEmpty()) item { Text("Favorite tracks to keep them here.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        items(favorites) { TrackRow(it.track.toSummary(), play, { remove(it.track.toSummary()) }, true, download, queue, playlists, addToPlaylist) }
+        items(favorites) { TrackRow(it.track.toSummary(), play, { favorite(it.track.toSummary()) }, true, download, queue, playlists, addToPlaylist) }
         item { Spacer(Modifier.height(12.dp)); Text("History", style = MaterialTheme.typography.titleLarge) }
-        items(history.filter { it.track != null }.take(20)) { TrackRow(it.track!!.toSummary(), play, {}, false, download, queue, playlists, addToPlaylist) }
+        items(history.filter { it.track != null }.take(20)) { val track = it.track!!.toSummary(); TrackRow(track, play, { favorite(track) }, track.video_id in favoriteIds, download, queue, playlists, addToPlaylist) }
     }
     if (showCreate) AlertDialog(onDismissRequest = { showCreate = false }, title = { Text("New playlist") }, text = { OutlinedTextField(name, { name = it }, label = { Text("Name") }) }, confirmButton = { TextButton({ createPlaylist(name); name = ""; showCreate = false }) { Text("Create") } }, dismissButton = { TextButton({ showCreate = false }) { Text("Cancel") } })
     if (showSettings) AlertDialog(onDismissRequest = { showSettings = false }, title = { Text("Settings") }, text = { Column { Text("Streaming quality"); SingleChoiceSegmentedButtonRow { listOf("low", "medium", "best").forEachIndexed { index, value -> SegmentedButton(selected = settings.quality == value, onClick = { setQuality(value) }, shape = SegmentedButtonDefaults.itemShape(index, 3)) { Text(value.replaceFirstChar { it.uppercase() }) } } }; Spacer(Modifier.height(12.dp)); Text("Downloads use any available network.", color = MaterialTheme.colorScheme.onSurfaceVariant) } }, confirmButton = { TextButton({ showSettings = false }) { Text("Done") } })
@@ -268,7 +271,7 @@ private fun LibraryScreen(favorites: List<FavoriteTrack>, history: List<HistoryT
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PlaylistDetailScreen(playlist: LocalPlaylistEntity, tracks: List<TrackEntity>, play: (TrackSummary) -> Unit, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit, remove: (String) -> Unit, close: () -> Unit, delete: () -> Unit) {
+private fun PlaylistDetailScreen(playlist: LocalPlaylistEntity, tracks: List<TrackEntity>, play: (TrackSummary) -> Unit, favorite: (TrackSummary) -> Unit, selected: Set<String>, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit, remove: (String) -> Unit, close: () -> Unit, delete: () -> Unit) {
     var confirmDelete by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp, vertical = 4.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -283,7 +286,8 @@ private fun PlaylistDetailScreen(playlist: LocalPlaylistEntity, tracks: List<Tra
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(tracks, key = { it.videoId }) { track ->
-                    TrackRow(track.toSummary(), play, {}, false, download, queue, playlists, addToPlaylist, onRemove = { remove(track.videoId) })
+                    val summary = track.toSummary()
+                    TrackRow(summary, play, { favorite(summary) }, track.videoId in selected, download, queue, playlists, addToPlaylist, onRemove = { remove(track.videoId) })
                 }
             }
         }
