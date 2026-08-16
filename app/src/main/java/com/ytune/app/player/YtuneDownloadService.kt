@@ -1,9 +1,10 @@
+@file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package com.ytune.app.player
 
 import android.app.Notification
 import android.content.Context
 import android.net.Uri
-import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.offline.Download
 import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.media3.exoplayer.offline.DownloadRequest
@@ -23,7 +24,6 @@ import kotlinx.coroutines.launch
 private const val DOWNLOAD_CHANNEL = "ytune_downloads"
 private const val DOWNLOAD_NOTIFICATION = 2001
 
-@UnstableApi
 class YtuneDownloadService : DownloadService(DOWNLOAD_NOTIFICATION, DEFAULT_FOREGROUND_NOTIFICATION_UPDATE_INTERVAL, DOWNLOAD_CHANNEL, R.string.app_name, 0) {
     private val helper by lazy { DownloadNotificationHelper(this, DOWNLOAD_CHANNEL) }
     override fun getDownloadManager(): DownloadManager = PlaybackManager.downloadManager
@@ -32,7 +32,6 @@ class YtuneDownloadService : DownloadService(DOWNLOAD_NOTIFICATION, DEFAULT_FORE
         helper.buildProgressNotification(this, android.R.drawable.stat_sys_download, null, null, downloads, notMetRequirements)
 }
 
-@UnstableApi
 class DownloadController(private val context: Context) {
     private val app = context.applicationContext as YtuneApplication
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

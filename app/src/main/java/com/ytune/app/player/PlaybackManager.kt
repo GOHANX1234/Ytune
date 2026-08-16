@@ -1,7 +1,8 @@
+@file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package com.ytune.app.player
 
 import android.content.Context
-import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.NoOpCacheEvictor
@@ -12,7 +13,6 @@ import com.ytune.app.YtuneApplication
 import java.io.File
 import java.util.concurrent.Executors
 
-@UnstableApi
 object PlaybackManager {
     private var initialized = false
     lateinit var cache: SimpleCache

@@ -1,9 +1,10 @@
+@file:androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+
 package com.ytune.app.player
 
 import android.app.PendingIntent
 import android.content.Intent
 import androidx.media3.common.*
-import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.session.MediaSession
@@ -14,7 +15,6 @@ import com.ytune.app.data.local.TrackEntity
 import com.ytune.app.data.toSummary
 import kotlinx.coroutines.*
 
-@UnstableApi
 class PlaybackService : MediaSessionService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var player: ExoPlayer
