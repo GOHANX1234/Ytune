@@ -21,6 +21,9 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
@@ -249,32 +252,61 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
     Surface(tonalElevation = 3.dp) { Row(Modifier.fillMaxWidth().height(68.dp).clickable(onClick = expand).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) { AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.size(52.dp)); Text(track.title, Modifier.weight(1f).padding(10.dp), maxLines = 1, overflow = TextOverflow.Ellipsis); IconButton(toggle) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play") }; IconButton(next) { Icon(Icons.Default.SkipNext, "Next") } } }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable private fun FullPlayer(state: PlaybackState, connection: PlaybackConnection, close: () -> Unit) {
     val track = state.current ?: return
     val app = LocalContext.current.applicationContext as YtuneApplication
     val scope = rememberCoroutineScope()
     var lyrics by remember(track.video_id) { mutableStateOf<String?>(null) }
-    var showLyrics by remember { mutableStateOf(false) }
+    var lyricsLoading by remember(track.video_id) { mutableStateOf(false) }
+    val pager = rememberPagerState { 2 }
     val syncedLines = remember(lyrics) { parseLrc(lyrics) }
     val activeLyric = syncedLines.indexOfLast { it.timeMs <= state.positionMs }.coerceAtLeast(0)
     val lyricListState = rememberLazyListState()
-    LaunchedEffect(activeLyric, showLyrics) { if (showLyrics && syncedLines.isNotEmpty()) lyricListState.animateScrollToItem(activeLyric.coerceAtLeast(0)) }
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 20.dp, vertical = 8.dp)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { IconButton(close) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }; Text("Now playing", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium); Icon(Icons.Default.GraphicEq, null, tint = MaterialTheme.colorScheme.primary) }
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-        AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.fillMaxWidth().heightIn(max = 340.dp).aspectRatio(1f).clip(RoundedCornerShape(28.dp)), contentScale = ContentScale.Crop)
-        Spacer(Modifier.height(16.dp)); Text(track.title, style = MaterialTheme.typography.headlineSmall, maxLines = 1, overflow = TextOverflow.Ellipsis); Text(track.artists.joinToString(), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Slider(value = state.positionMs.toFloat(), onValueChange = { connection.seek(it.toLong()) }, valueRange = 0f..state.durationMs.coerceAtLeast(1).toFloat())
-        Row(Modifier.fillMaxWidth()) { Text(formatTime(state.positionMs), style = MaterialTheme.typography.labelSmall); Spacer(Modifier.weight(1f)); Text(formatTime(state.durationMs), style = MaterialTheme.typography.labelSmall) }
-        Row(verticalAlignment = Alignment.CenterVertically) { IconButton(connection::toggleShuffle) { Icon(Icons.Default.Shuffle, "Shuffle", tint = if (state.shuffle) MaterialTheme.colorScheme.primary else LocalContentColor.current) }; IconButton(connection::previous, enabled = state.hasPrevious) { Icon(Icons.Default.SkipPrevious, "Previous") }; FilledIconButton(connection::toggle) { Icon(if (state.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play") }; IconButton(connection::next, enabled = state.hasNext) { Icon(Icons.Default.SkipNext, "Next") }; IconButton(connection::cycleRepeat) { Icon(Icons.Default.Repeat, "Repeat", tint = if (state.repeatMode != 0) MaterialTheme.colorScheme.primary else LocalContentColor.current) } }
-        TextButton({ showLyrics = !showLyrics; if (lyrics == null) scope.launch { lyrics = runCatching { app.repository.lyrics(track.video_id).lyrics?.let { it.synced_lyrics ?: it.plain_lyrics } }.getOrNull() ?: "Lyrics are not available." } }) { Icon(Icons.Default.Lyrics, null); Spacer(Modifier.width(8.dp)); Text("Lyrics") }
-        if (showLyrics) {
-            if (lyrics == null) CircularProgressIndicator(Modifier.size(24.dp))
-            else if (syncedLines.isNotEmpty()) LazyColumn(Modifier.fillMaxWidth().heightIn(max = 280.dp), state = lyricListState, contentPadding = PaddingValues(vertical = 8.dp)) { itemsIndexed(syncedLines) { index, line -> Text(line.text, Modifier.fillMaxWidth().clickable { connection.seek(line.timeMs) }.padding(vertical = 5.dp), style = if (index == activeLyric) MaterialTheme.typography.titleMedium else MaterialTheme.typography.bodyLarge, color = if (index == activeLyric) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant) } }
-            else Text(lyrics.orEmpty(), Modifier.fillMaxWidth().heightIn(max = 280.dp), style = MaterialTheme.typography.bodyLarge)
+    LaunchedEffect(pager.currentPage, track.video_id) {
+        if (pager.currentPage == 1 && lyrics == null && !lyricsLoading) {
+            lyricsLoading = true
+            lyrics = runCatching { app.repository.lyrics(track.video_id).lyrics?.let { it.synced_lyrics ?: it.plain_lyrics } }.getOrNull() ?: "Lyrics are not available."
+            lyricsLoading = false
         }
+    }
+    LaunchedEffect(activeLyric, pager.currentPage) { if (pager.currentPage == 1 && syncedLines.isNotEmpty()) lyricListState.animateScrollToItem(activeLyric) }
+    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+        Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(close) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) { Text(if (pager.currentPage == 0) "Now playing" else "Lyrics", style = MaterialTheme.typography.labelLarge); Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            IconButton({ scope.launch { pager.animateScrollToPage(if (pager.currentPage == 0) 1 else 0) } }) { Icon(if (pager.currentPage == 0) Icons.Default.Lyrics else Icons.Default.GraphicEq, if (pager.currentPage == 0) "Show lyrics" else "Show player") }
         }
-        if (state.queue.isNotEmpty()) { Spacer(Modifier.height(12.dp)); Text("Up next", style = MaterialTheme.typography.titleMedium); LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) { itemsIndexed(state.queue) { index, item -> ListItem(modifier = Modifier.clickable { connection.seekToItem(index) }, headlineContent = { Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, supportingContent = { Text(item.artists.joinToString()) }, trailingContent = { if (index == state.currentIndex) Icon(Icons.Default.PlayArrow, "Playing") }) } } }
+        HorizontalPager(state = pager, modifier = Modifier.weight(1f), beyondViewportPageCount = 1) { page ->
+            if (page == 0) PlayerPage(state, connection) { scope.launch { pager.animateScrollToPage(1) } }
+            else LyricsPage(lyrics, lyricsLoading, syncedLines, activeLyric, lyricListState, connection)
+        }
+        Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.Center) { repeat(2) { page -> Box(Modifier.padding(3.dp).size(if (pager.currentPage == page) 18.dp else 6.dp, 6.dp).clip(RoundedCornerShape(3.dp)).background(if (pager.currentPage == page) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) } }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable private fun PlayerPage(state: PlaybackState, connection: PlaybackConnection, showLyrics: () -> Unit) {
+    val track = state.current ?: return
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        item { AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.fillMaxWidth().widthIn(max = 460.dp).aspectRatio(1f).clip(RoundedCornerShape(20.dp)), contentScale = ContentScale.Crop) }
+        item { Spacer(Modifier.height(24.dp)); Text(track.title, Modifier.fillMaxWidth(), style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis); Text(track.artists.joinToString().ifBlank { track.uploader ?: "Unknown artist" }, Modifier.fillMaxWidth().padding(top = 4.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+        item { Spacer(Modifier.height(14.dp)); Slider(state.positionMs.toFloat(), { connection.seek(it.toLong()) }, valueRange = 0f..state.durationMs.coerceAtLeast(1).toFloat()); Row(Modifier.fillMaxWidth()) { Text(formatTime(state.positionMs), style = MaterialTheme.typography.labelSmall); Spacer(Modifier.weight(1f)); Text("-${formatTime((state.durationMs - state.positionMs).coerceAtLeast(0))}", style = MaterialTheme.typography.labelSmall) } }
+        item { Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) { IconButton(connection::toggleShuffle) { Icon(Icons.Default.Shuffle, "Shuffle", tint = if (state.shuffle) MaterialTheme.colorScheme.primary else LocalContentColor.current) }; IconButton(connection::previous, enabled = state.hasPrevious) { Icon(Icons.Default.SkipPrevious, "Previous", Modifier.size(34.dp)) }; FilledIconButton(connection::toggle, Modifier.size(64.dp)) { Icon(if (state.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play", Modifier.size(36.dp)) }; IconButton(connection::next, enabled = state.hasNext) { Icon(Icons.Default.SkipNext, "Next", Modifier.size(34.dp)) }; IconButton(connection::cycleRepeat) { Icon(if (state.repeatMode == 1) Icons.Default.RepeatOne else Icons.Default.Repeat, "Repeat", tint = if (state.repeatMode != 0) MaterialTheme.colorScheme.primary else LocalContentColor.current) } } }
+        item { OutlinedButton(showLyrics, Modifier.fillMaxWidth().padding(vertical = 8.dp)) { Icon(Icons.Default.Lyrics, null); Spacer(Modifier.width(8.dp)); Text("Swipe for lyrics") } }
+        if (state.queue.isNotEmpty()) {
+            item { Row(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) { Text("Up next", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge); Text("${state.queue.size} tracks", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium) } }
+            itemsIndexed(state.queue, key = { index, item -> "$index-${item.video_id}" }) { index, item -> ListItem(modifier = Modifier.fillMaxWidth().clickable { connection.seekToItem(index) }, colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent), leadingContent = { AsyncImage(item.highest_resolution_thumbnail ?: item.thumbnail, null, Modifier.size(48.dp).clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Crop) }, headlineContent = { Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, color = if (index == state.currentIndex) MaterialTheme.colorScheme.primary else LocalContentColor.current) }, supportingContent = { Text(item.artists.joinToString(), maxLines = 1, overflow = TextOverflow.Ellipsis) }, trailingContent = { if (index == state.currentIndex) Icon(Icons.Default.GraphicEq, "Playing", tint = MaterialTheme.colorScheme.primary) }) }
+        }
+    }
+}
+
+@Composable private fun LyricsPage(lyrics: String?, loading: Boolean, synced: List<LrcLine>, active: Int, listState: androidx.compose.foundation.lazy.LazyListState, connection: PlaybackConnection) {
+    when {
+        loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        lyrics == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Swipe here to load lyrics", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        synced.isNotEmpty() -> LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(horizontal = 24.dp, vertical = 40.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) { itemsIndexed(synced) { index, line -> Text(line.text, Modifier.fillMaxWidth().clickable { connection.seek(line.timeMs) }, style = if (index == active) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleLarge, color = if (index == active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)) } }
+        else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 24.dp, vertical = 40.dp)) { item { Text(lyrics, style = MaterialTheme.typography.titleLarge, lineHeight = MaterialTheme.typography.titleLarge.lineHeight * 1.25f) } }
     }
 }
 
