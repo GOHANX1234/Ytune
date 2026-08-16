@@ -13,9 +13,15 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -30,15 +36,25 @@ import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
@@ -55,6 +71,15 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+/* ── Glass design tokens ────────────────────────────────────────────── */
+
+private val GlassWhite = Color.White.copy(alpha = 0.07f)
+private val GlassBorder = BorderStroke(0.5.dp, Color.White.copy(alpha = 0.09f))
+private val GlassShape = RoundedCornerShape(16.dp)
+private val GlassShapeSmall = RoundedCornerShape(12.dp)
+
+/* ── Activity ───────────────────────────────────────────────────────── */
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -81,6 +106,8 @@ class MainActivity : ComponentActivity() {
         setContent { YtuneTheme { YtuneApp() } }
     }
 }
+
+/* ── ViewModel ──────────────────────────────────────────────────────── */
 
 class YtuneViewModel(application: android.app.Application) : AndroidViewModel(application) {
     private val app = application as YtuneApplication
@@ -134,8 +161,25 @@ class YtuneViewModel(application: android.app.Application) : AndroidViewModel(ap
     fun setWifiOnly(value: Boolean) = viewModelScope.launch { repository.setWifiOnly(value) }
 }
 
+/* ── Navigation ─────────────────────────────────────────────────────── */
+
 private enum class Destination { Home, Search, Library, Downloads }
 private val LocalPendingDownloads = compositionLocalOf<Set<String>> { emptySet() }
+
+private fun Destination.iconFilled(): ImageVector = when (this) {
+    Destination.Home -> Icons.Filled.Home
+    Destination.Search -> Icons.Filled.Search
+    Destination.Library -> Icons.Filled.LibraryMusic
+    Destination.Downloads -> Icons.Filled.Download
+}
+private fun Destination.iconOutlined(): ImageVector = when (this) {
+    Destination.Home -> Icons.Outlined.Home
+    Destination.Search -> Icons.Outlined.Search
+    Destination.Library -> Icons.Outlined.LibraryMusic
+    Destination.Downloads -> Icons.Outlined.Download
+}
+
+/* ── Root composable ────────────────────────────────────────────────── */
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -158,136 +202,238 @@ fun YtuneApp(vm: YtuneViewModel = viewModel()) {
     LaunchedEffect(downloadError) { downloadError?.let { snackbar.showSnackbar(it) } }
     LaunchedEffect(vm.error) { vm.error?.let { snackbar.showSnackbar(it) } }
     DisposableEffect(connection) { connection.connect(); onDispose { connection.disconnect() } }
+
+    /* Play a single track (adds to queue) */
     fun play(track: TrackSummary) { connection.play(track, replaceQueue = false); vm.recordPlayed(track) }
+    /* Play from a list context so next/prev works */
+    fun playFrom(tracks: List<TrackSummary>, index: Int) { connection.playAll(tracks, index); vm.recordPlayed(tracks[index]) }
+    val favoriteIds = remember(favorites) { favorites.map { it.track.videoId }.toSet() }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         snackbarHost = { SnackbarHost(snackbar) },
+        containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            if (!showPlayer) Column {
-                playback.current?.let { MiniPlayer(it, playback.playing, connection::toggle, connection::next) { showPlayer = true } }
-                NavigationBar {
-                    Destination.entries.forEach { item ->
-                        NavigationBarItem(destination.value == item, { destination.value = item }, { Icon(item.icon(), item.name) }, label = { Text(item.name) })
+            AnimatedVisibility(!showPlayer, enter = slideInVertically { it } + fadeIn(spring(stiffness = Spring.StiffnessMediumLow)), exit = slideOutVertically { it } + fadeOut()) {
+                Column {
+                    playback.current?.let { track ->
+                        MiniPlayer(track, playback.playing, playback.positionMs, playback.durationMs, connection::toggle, connection::next) { showPlayer = true }
                     }
+                    LiquidNavBar(destination.value) { destination.value = it }
                 }
             }
         }
     ) { padding ->
         CompositionLocalProvider(LocalPendingDownloads provides pendingDownloads) {
-            Box(Modifier.fillMaxSize().padding(padding).background(MaterialTheme.colorScheme.background)) {
-                if (showPlayer) {
+            Box(Modifier.fillMaxSize().padding(padding)) {
+                AnimatedVisibility(showPlayer, enter = slideInVertically { it } + fadeIn(spring(stiffness = Spring.StiffnessMediumLow)), exit = slideOutVertically { it } + fadeOut()) {
                     FullPlayer(playback, connection) { showPlayer = false }
-                } else when (destination.value) {
-                    Destination.Home -> HomeScreen(vm, { destination.value = Destination.Search; vm.search(it) }, ::play, { vm.toggleFavorite(it) }, favorites.map { it.track.videoId }.toSet(), downloader::download, connection::addToQueue, playlists, vm::addToPlaylist)
-                    Destination.Search -> SearchScreen(vm, ::play, { vm.toggleFavorite(it) }, favorites.map { it.track.videoId }.toSet(), downloader::download, connection::addToQueue, playlists, vm::addToPlaylist)
-                    Destination.Library -> LibraryScreen(favorites, history, playlists, settings, vm::setQuality, vm::createPlaylist, ::play, { vm.toggleFavorite(it) }, downloader::download, connection::addToQueue, vm::addToPlaylist, vm::playlistTracks, vm::removeFromPlaylist, vm::deletePlaylist)
-                    Destination.Downloads -> DownloadsScreen(downloads, downloadProgress, ::play, downloader)
                 }
-                if (vm.loading) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+                AnimatedVisibility(!showPlayer, enter = fadeIn(tween(200)), exit = fadeOut(tween(150))) {
+                    Crossfade(destination.value, animationSpec = tween(240), label = "nav") { dest ->
+                        when (dest) {
+                            Destination.Home -> HomeScreen(vm, { destination.value = Destination.Search; vm.search(it) }, ::play, ::playFrom, { vm.toggleFavorite(it) }, favoriteIds, downloader::download, connection::addToQueue, playlists, vm::addToPlaylist)
+                            Destination.Search -> SearchScreen(vm, ::play, ::playFrom, { vm.toggleFavorite(it) }, favoriteIds, downloader::download, connection::addToQueue, playlists, vm::addToPlaylist)
+                            Destination.Library -> LibraryScreen(favorites, history, playlists, settings, vm::setQuality, vm::createPlaylist, ::play, ::playFrom, { vm.toggleFavorite(it) }, downloader::download, connection::addToQueue, vm::addToPlaylist, vm::playlistTracks, vm::removeFromPlaylist, vm::deletePlaylist)
+                            Destination.Downloads -> DownloadsScreen(downloads, downloadProgress, ::play, ::playFrom, downloader)
+                        }
+                    }
+                }
+                if (vm.loading) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter), color = MaterialTheme.colorScheme.primary, trackColor = Color.Transparent)
             }
         }
     }
 }
 
-@Composable private fun HomeScreen(vm: YtuneViewModel, search: (String) -> Unit, play: (TrackSummary) -> Unit, favorite: (TrackSummary) -> Unit, selected: Set<String>, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit) {
-    val remotePlaylist by vm.playlist.collectAsStateWithLifecycle()
-    val recent by vm.recentDiscoveries.collectAsStateWithLifecycle(emptyList())
-    LazyColumn(Modifier.fillMaxSize().statusBarsPadding(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item { Text("Ytune", style = MaterialTheme.typography.headlineLarge); Text("Everything you love, right here", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        item { OutlinedTextField(vm.query, { vm.query = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(18.dp), placeholder = { Text("Songs, artists, or playlist links") }, trailingIcon = { if (vm.loading) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp) else IconButton({ search(vm.query) }) { Icon(Icons.Default.Search, "Search") } }) }
-        item { Text("Quick starts", style = MaterialTheme.typography.titleLarge); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("Top hits", "Chill", "Workout", "Focus").forEach { SuggestionChip({ search(it) }, label = { Text(it) }) } } }
-        remotePlaylist?.let { loaded -> item { Text(loaded.playlist.title, style = MaterialTheme.typography.titleLarge); Text("${loaded.tracks.size} tracks", color = MaterialTheme.colorScheme.onSurfaceVariant) }; items(loaded.tracks) { item -> val track = TrackSummary(item.video_id, item.title, listOfNotNull(item.uploader), duration_seconds = item.duration_seconds, thumbnail = item.thumbnail); TrackRow(track, play, { favorite(track) }, track.video_id in selected, download, queue, playlists, addToPlaylist) } }
-        if (recent.isNotEmpty()) { item { Text("Recently discovered", style = MaterialTheme.typography.titleLarge) }; items(recent.take(12), key = { it.track.videoId }) { val track = it.track.toSummary(); TrackRow(track, play, { favorite(track) }, track.video_id in selected, download, queue, playlists, addToPlaylist) } }
+/* ── iOS-style compact navigation bar ───────────────────────────────── */
+
+@Composable
+private fun LiquidNavBar(current: Destination, onSelect: (Destination) -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+        tonalElevation = 0.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            Modifier.fillMaxWidth().navigationBarsPadding().height(56.dp).padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Destination.entries.forEach { dest ->
+                val selected = current == dest
+                val scale by animateFloatAsState(if (selected) 1f else 0.92f, spring(dampingRatio = Spring.DampingRatioMediumBouncy), label = "nav-scale")
+                val alpha by animateFloatAsState(if (selected) 1f else 0.55f, tween(200), label = "nav-alpha")
+                Column(
+                    modifier = Modifier.weight(1f).graphicsLayer { scaleX = scale; scaleY = scale; this.alpha = alpha }.clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onSelect(dest) },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(if (selected) dest.iconFilled() else dest.iconOutlined(), dest.name, Modifier.size(22.dp), tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.height(2.dp))
+                    Text(dest.name, style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp), maxLines = 1, color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
+                }
+            }
+        }
     }
 }
 
-@Composable private fun SearchScreen(vm: YtuneViewModel, play: (TrackSummary) -> Unit, favorite: (TrackSummary) -> Unit, selected: Set<String>, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit) {
+/* ── Compact mini player ────────────────────────────────────────────── */
+
+@Composable
+private fun MiniPlayer(track: TrackSummary, playing: Boolean, positionMs: Long, durationMs: Long, toggle: () -> Unit, next: () -> Unit, expand: () -> Unit) {
+    val progress = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+    val animatedProgress by animateFloatAsState(progress, tween(300), label = "mini-progress")
+    Surface(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = expand),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        tonalElevation = 0.dp
+    ) {
+        Column {
+            /* Thin progress line */
+            Box(Modifier.fillMaxWidth().height(2.dp).background(Color.White.copy(alpha = 0.06f))) {
+                Box(Modifier.fillMaxHeight().fillMaxWidth(animatedProgress).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)))
+            }
+            Row(Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 10.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text(track.artists.joinToString().ifBlank { "Unknown artist" }, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                IconButton(toggle, Modifier.size(36.dp)) {
+                    Crossfade(playing, label = "mini-pp") { p ->
+                        Icon(if (p) Icons.Default.Pause else Icons.Default.PlayArrow, "Play", Modifier.size(22.dp))
+                    }
+                }
+                IconButton(next, Modifier.size(36.dp)) { Icon(Icons.Default.SkipNext, "Next", Modifier.size(20.dp)) }
+            }
+        }
+    }
+}
+
+/* ── Home ────────────────────────────────────────────────────────────── */
+
+@Composable
+private fun HomeScreen(vm: YtuneViewModel, search: (String) -> Unit, play: (TrackSummary) -> Unit, playFrom: (List<TrackSummary>, Int) -> Unit, favorite: (TrackSummary) -> Unit, selected: Set<String>, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit) {
+    val remotePlaylist by vm.playlist.collectAsStateWithLifecycle()
+    val recent by vm.recentDiscoveries.collectAsStateWithLifecycle(emptyList())
+    val recentTracks = remember(recent) { recent.map { it.track.toSummary() } }
+    LazyColumn(Modifier.fillMaxSize().statusBarsPadding(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item { Spacer(Modifier.height(4.dp)); Text("Ytune", style = MaterialTheme.typography.headlineLarge); Text("Everything you love, right here", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium) }
+        item { GlassTextField(vm.query, { vm.query = it }, "Songs, artists, or playlist links", vm.loading) { search(vm.query) } }
+        item { Text("Quick starts", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 4.dp)); Spacer(Modifier.height(4.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("Top hits", "Chill", "Workout", "Focus").forEach { GlassChip(it) { search(it) } } } }
+        remotePlaylist?.let { loaded ->
+            val plTracks = remember(loaded) { loaded.tracks.map { item -> TrackSummary(item.video_id, item.title, listOfNotNull(item.uploader), duration_seconds = item.duration_seconds, thumbnail = item.thumbnail) } }
+            item { Text(loaded.playlist.title, style = MaterialTheme.typography.titleLarge); Text("${loaded.tracks.size} tracks", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
+            itemsIndexed(plTracks) { index, track -> TrackRow(track, { playFrom(plTracks, index) }, { favorite(track) }, track.video_id in selected, download, queue, playlists, addToPlaylist) }
+        }
+        if (recentTracks.isNotEmpty()) {
+            item { Text("Recently discovered", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 4.dp)) }
+            itemsIndexed(recentTracks.take(12), key = { _, t -> t.video_id }) { index, track -> TrackRow(track, { playFrom(recentTracks.take(12), index) }, { favorite(track) }, track.video_id in selected, download, queue, playlists, addToPlaylist) }
+        }
+        item { Spacer(Modifier.height(8.dp)) }
+    }
+}
+
+/* ── Search ──────────────────────────────────────────────────────────── */
+
+@Composable
+private fun SearchScreen(vm: YtuneViewModel, play: (TrackSummary) -> Unit, playFrom: (List<TrackSummary>, Int) -> Unit, favorite: (TrackSummary) -> Unit, selected: Set<String>, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit) {
     val searches by vm.searchHistory.collectAsStateWithLifecycle(emptyList())
     val suggestions = searches.map { it.query }.filter { vm.query.isBlank() || it.contains(vm.query, ignoreCase = true) }.take(6)
     LaunchedEffect(vm.query) { delay(450); if (vm.query.trim().length >= 2) vm.search(vm.query) else vm.clearSearchResults() }
-    Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp, vertical = 4.dp)) {
+    Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Text("Search", style = MaterialTheme.typography.headlineLarge)
-        OutlinedTextField(vm.query, { vm.query = it }, Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(18.dp), trailingIcon = { if (vm.loading) CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp) else IconButton({ vm.search() }) { Icon(Icons.Default.Search, "Search") } })
-        if (suggestions.isNotEmpty()) { Spacer(Modifier.height(8.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Text("Recent searches", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f)); IconButton(vm::clearSearchHistory, modifier = Modifier.size(36.dp)) { Icon(Icons.Default.ClearAll, "Clear search history") } }; LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { items(suggestions) { suggestion -> SuggestionChip({ vm.query = suggestion; vm.search(suggestion) }, label = { Text(suggestion, maxLines = 1) }) } } }
-        Spacer(Modifier.height(10.dp)); LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) { items(vm.results, key = { it.video_id }) { TrackRow(it, play, { favorite(it) }, it.video_id in selected, download, queue, playlists, addToPlaylist) } }
+        Spacer(Modifier.height(8.dp))
+        GlassTextField(vm.query, { vm.query = it }, "What do you want to listen to?", vm.loading) { vm.search() }
+        if (suggestions.isNotEmpty()) {
+            Spacer(Modifier.height(10.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) { Text("Recent", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant); IconButton(vm::clearSearchHistory, Modifier.size(32.dp)) { Icon(Icons.Default.ClearAll, "Clear", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) } }
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) { items(suggestions) { suggestion -> GlassChip(suggestion) { vm.query = suggestion; vm.search(suggestion) } } }
+        }
+        Spacer(Modifier.height(10.dp))
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            itemsIndexed(vm.results, key = { _, t -> t.video_id }) { index, track ->
+                TrackRow(track, { playFrom(vm.results, index) }, { favorite(track) }, track.video_id in selected, download, queue, playlists, addToPlaylist)
+            }
+        }
     }
 }
 
+/* ── Library ─────────────────────────────────────────────────────────── */
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun LibraryScreen(favorites: List<FavoriteTrack>, history: List<HistoryTrack>, playlists: List<LocalPlaylistEntity>, settings: PlaybackPreferences, setQuality: (String) -> Unit, createPlaylist: (String) -> Unit, play: (TrackSummary) -> Unit, favorite: (TrackSummary) -> Unit, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, addToPlaylist: (String, TrackSummary) -> Unit, playlistTracks: (String) -> Flow<List<TrackEntity>>, removeFromPlaylist: (String, String) -> Unit, deletePlaylist: (String) -> Unit) {
+private fun LibraryScreen(favorites: List<FavoriteTrack>, history: List<HistoryTrack>, playlists: List<LocalPlaylistEntity>, settings: PlaybackPreferences, setQuality: (String) -> Unit, createPlaylist: (String) -> Unit, play: (TrackSummary) -> Unit, playFrom: (List<TrackSummary>, Int) -> Unit, favorite: (TrackSummary) -> Unit, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, addToPlaylist: (String, TrackSummary) -> Unit, playlistTracks: (String) -> Flow<List<TrackEntity>>, removeFromPlaylist: (String, String) -> Unit, deletePlaylist: (String) -> Unit) {
     var showCreate by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
     var selectedPlaylistId by remember { mutableStateOf<String?>(null) }
     val selectedPlaylist = playlists.firstOrNull { it.id == selectedPlaylistId }
     val favoriteIds = favorites.map { it.track.videoId }.toSet()
+    val favTracks = remember(favorites) { favorites.map { it.track.toSummary() } }
+    val histTracks = remember(history) { history.filter { it.track != null }.take(20).map { it.track!!.toSummary() } }
 
     if (selectedPlaylist != null) {
         val tracksFlow = remember(selectedPlaylist.id) { playlistTracks(selectedPlaylist.id) }
         val tracks by tracksFlow.collectAsStateWithLifecycle(emptyList())
         BackHandler { selectedPlaylistId = null }
-        PlaylistDetailScreen(
-            playlist = selectedPlaylist,
-            tracks = tracks,
-            play = play,
-            favorite = favorite,
-            selected = favoriteIds,
-            download = download,
-            queue = queue,
-            playlists = playlists,
-            addToPlaylist = addToPlaylist,
-            remove = { removeFromPlaylist(selectedPlaylist.id, it) },
-            close = { selectedPlaylistId = null },
-            delete = { deletePlaylist(selectedPlaylist.id); selectedPlaylistId = null }
-        )
+        PlaylistDetailScreen(selectedPlaylist, tracks, play, playFrom, favorite, favoriteIds, download, queue, playlists, addToPlaylist, { removeFromPlaylist(selectedPlaylist.id, it) }, { selectedPlaylistId = null }, { deletePlaylist(selectedPlaylist.id); selectedPlaylistId = null })
         return
     }
 
-    LazyColumn(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item { Row(verticalAlignment = Alignment.CenterVertically) { Text("Your Library", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f)); IconButton({ showSettings = true }) { Icon(Icons.Default.Settings, "Settings") } } }
-        item { Row(verticalAlignment = Alignment.CenterVertically) { Text("Playlists", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f)); IconButton({ showCreate = true }) { Icon(Icons.Default.Add, "Create playlist") } } }
+    LazyColumn(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        item { Row(verticalAlignment = Alignment.CenterVertically) { Text("Your Library", style = MaterialTheme.typography.headlineLarge, modifier = Modifier.weight(1f)); IconButton({ showSettings = true }) { Icon(Icons.Outlined.Settings, "Settings", tint = MaterialTheme.colorScheme.onSurfaceVariant) } } }
+        item { Row(verticalAlignment = Alignment.CenterVertically) { Text("Playlists", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f)); IconButton({ showCreate = true }) { Icon(Icons.Default.Add, "Create", tint = MaterialTheme.colorScheme.primary) } } }
         items(playlists, key = { it.id }) { playlist ->
-            Surface(onClick = { selectedPlaylistId = playlist.id }, shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
+            Surface(onClick = { selectedPlaylistId = playlist.id }, shape = GlassShapeSmall, color = GlassWhite, border = GlassBorder, modifier = Modifier.fillMaxWidth()) {
                 ListItem(
                     headlineContent = { Text(playlist.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                    supportingContent = { Text("View songs", color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                    leadingContent = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null, tint = MaterialTheme.colorScheme.primary) },
-                    trailingContent = { Icon(Icons.Default.ChevronRight, "Open playlist") },
-                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+                    supportingContent = { Text("View songs", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) },
+                    leadingContent = { Box(Modifier.size(40.dp).clip(GlassShapeSmall).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Filled.QueueMusic, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary) } },
+                    trailingContent = { Icon(Icons.Default.ChevronRight, "Open", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent)
                 )
             }
         }
-        item { Text("Favorites", style = MaterialTheme.typography.titleLarge) }
-        if (favorites.isEmpty()) item { Text("Favorite tracks to keep them here.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        items(favorites) { TrackRow(it.track.toSummary(), play, { favorite(it.track.toSummary()) }, true, download, queue, playlists, addToPlaylist) }
-        item { Spacer(Modifier.height(12.dp)); Text("History", style = MaterialTheme.typography.titleLarge) }
-        items(history.filter { it.track != null }.take(20)) { val track = it.track!!.toSummary(); TrackRow(track, play, { favorite(track) }, track.video_id in favoriteIds, download, queue, playlists, addToPlaylist) }
+        if (favTracks.isNotEmpty()) {
+            item { Text("Favorites", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp)) }
+            itemsIndexed(favTracks) { index, track -> TrackRow(track, { playFrom(favTracks, index) }, { favorite(track) }, true, download, queue, playlists, addToPlaylist) }
+        } else {
+            item { Text("Favorites", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp)) }
+            item { Text("Favourite tracks to keep them here.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
+        }
+        if (histTracks.isNotEmpty()) {
+            item { Text("History", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp)) }
+            itemsIndexed(histTracks) { index, track -> TrackRow(track, { playFrom(histTracks, index) }, { favorite(track) }, track.video_id in favoriteIds, download, queue, playlists, addToPlaylist) }
+        }
+        item { Spacer(Modifier.height(8.dp)) }
     }
-    if (showCreate) AlertDialog(onDismissRequest = { showCreate = false }, title = { Text("New playlist") }, text = { OutlinedTextField(name, { name = it }, label = { Text("Name") }) }, confirmButton = { TextButton({ createPlaylist(name); name = ""; showCreate = false }) { Text("Create") } }, dismissButton = { TextButton({ showCreate = false }) { Text("Cancel") } })
-    if (showSettings) AlertDialog(onDismissRequest = { showSettings = false }, title = { Text("Settings") }, text = { Column { Text("Streaming quality"); SingleChoiceSegmentedButtonRow { listOf("low", "medium", "best").forEachIndexed { index, value -> SegmentedButton(selected = settings.quality == value, onClick = { setQuality(value) }, shape = SegmentedButtonDefaults.itemShape(index, 3)) { Text(value.replaceFirstChar { it.uppercase() }) } } }; Spacer(Modifier.height(12.dp)); Text("Downloads use any available network.", color = MaterialTheme.colorScheme.onSurfaceVariant) } }, confirmButton = { TextButton({ showSettings = false }) { Text("Done") } })
+    if (showCreate) AlertDialog(onDismissRequest = { showCreate = false }, title = { Text("New playlist") }, text = { OutlinedTextField(name, { name = it }, label = { Text("Name") }, shape = GlassShapeSmall) }, confirmButton = { TextButton({ createPlaylist(name); name = ""; showCreate = false }) { Text("Create") } }, dismissButton = { TextButton({ showCreate = false }) { Text("Cancel") } })
+    if (showSettings) AlertDialog(onDismissRequest = { showSettings = false }, title = { Text("Settings") }, text = { Column { Text("Streaming quality", style = MaterialTheme.typography.labelLarge); Spacer(Modifier.height(8.dp)); SingleChoiceSegmentedButtonRow { listOf("low", "medium", "best").forEachIndexed { index, value -> SegmentedButton(selected = settings.quality == value, onClick = { setQuality(value) }, shape = SegmentedButtonDefaults.itemShape(index, 3)) { Text(value.replaceFirstChar { it.uppercase() }) } } } } }, confirmButton = { TextButton({ showSettings = false }) { Text("Done") } })
 }
+
+/* ── Playlist detail ─────────────────────────────────────────────────── */
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PlaylistDetailScreen(playlist: LocalPlaylistEntity, tracks: List<TrackEntity>, play: (TrackSummary) -> Unit, favorite: (TrackSummary) -> Unit, selected: Set<String>, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit, remove: (String) -> Unit, close: () -> Unit, delete: () -> Unit) {
+private fun PlaylistDetailScreen(playlist: LocalPlaylistEntity, tracks: List<TrackEntity>, play: (TrackSummary) -> Unit, playFrom: (List<TrackSummary>, Int) -> Unit, favorite: (TrackSummary) -> Unit, selected: Set<String>, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit, remove: (String) -> Unit, close: () -> Unit, delete: () -> Unit) {
     var confirmDelete by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp, vertical = 4.dp)) {
+    val summaries = remember(tracks) { tracks.map { it.toSummary() } }
+    Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             IconButton(close) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
             Text(playlist.name, style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            IconButton({ confirmDelete = true }) { Icon(Icons.Default.DeleteOutline, "Delete playlist") }
+            IconButton({ confirmDelete = true }) { Icon(Icons.Outlined.DeleteOutline, "Delete", tint = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
-        Text("${tracks.size} ${if (tracks.size == 1) "song" else "songs"}", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 48.dp))
+        Text("${tracks.size} ${if (tracks.size == 1) "song" else "songs"}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 48.dp))
         Spacer(Modifier.height(12.dp))
         if (tracks.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Songs added to this playlist will appear here.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Songs added to this playlist will appear here.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium) }
         } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(tracks, key = { it.videoId }) { track ->
-                    val summary = track.toSummary()
-                    TrackRow(summary, play, { favorite(summary) }, track.videoId in selected, download, queue, playlists, addToPlaylist, onRemove = { remove(track.videoId) })
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                itemsIndexed(summaries, key = { _, t -> t.video_id }) { index, summary ->
+                    TrackRow(summary, { playFrom(summaries, index) }, { favorite(summary) }, summary.video_id in selected, download, queue, playlists, addToPlaylist, onRemove = { remove(summary.video_id) })
                 }
             }
         }
@@ -295,59 +441,103 @@ private fun PlaylistDetailScreen(playlist: LocalPlaylistEntity, tracks: List<Tra
     if (confirmDelete) AlertDialog(onDismissRequest = { confirmDelete = false }, title = { Text("Delete playlist?") }, text = { Text("${playlist.name} and its song list will be removed.") }, confirmButton = { TextButton({ confirmDelete = false; delete() }) { Text("Delete") } }, dismissButton = { TextButton({ confirmDelete = false }) { Text("Cancel") } })
 }
 
-@Composable private fun DownloadsScreen(downloads: List<DownloadEntity>, progress: Map<String, Float>, play: (TrackSummary) -> Unit, downloader: DownloadController) {
+/* ── Downloads ───────────────────────────────────────────────────────── */
+
+@Composable
+private fun DownloadsScreen(downloads: List<DownloadEntity>, progress: Map<String, Float>, play: (TrackSummary) -> Unit, playFrom: (List<TrackSummary>, Int) -> Unit, downloader: DownloadController) {
     val context = LocalContext.current
-    Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp, vertical = 4.dp)) {
+    val completed = remember(downloads) { downloads.filter { it.state == androidx.media3.exoplayer.offline.Download.STATE_COMPLETED } }
+    val completedTracks = remember(completed) { completed.map { TrackSummary(it.videoId, it.title.ifBlank { it.videoId }, it.artists.split("\u001f").filter { a -> a.isNotBlank() }, highest_resolution_thumbnail = it.artworkUrl) } }
+    Column(Modifier.fillMaxSize().statusBarsPadding().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Text("Downloads", style = MaterialTheme.typography.headlineLarge)
-        Text("Your music, available offline", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Your music, available offline", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
         Spacer(Modifier.height(12.dp))
-        if (downloads.isEmpty()) Text("Downloaded tracks will be available without a connection.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 16.dp)) { items(downloads, key = { it.videoId }) { item ->
-            val track = TrackSummary(item.videoId, item.title.ifBlank { item.videoId }, item.artists.split("\u001f").filter { it.isNotBlank() }, highest_resolution_thumbnail = item.artworkUrl)
-            val percent = progress[item.videoId] ?: item.percent
-            val active = item.state == androidx.media3.exoplayer.offline.Download.STATE_QUEUED || item.state == androidx.media3.exoplayer.offline.Download.STATE_DOWNLOADING
-            val completed = item.state == androidx.media3.exoplayer.offline.Download.STATE_COMPLETED
-            val artist = track.artists.joinToString().ifBlank { "Unknown artist" }
-            val artwork = ArtworkCache.displayUri(context, item.videoId, item.artworkUrl)
-            Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth().clickable(enabled = completed) { play(track) }) {
-                Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    AsyncImage(artwork, null, Modifier.size(72.dp).clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Crop)
-                    Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                        Text(track.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(artist, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Spacer(Modifier.height(6.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(if (completed) Icons.Default.OfflinePin else if (item.error != null) Icons.Default.ErrorOutline else Icons.Default.Download, null, Modifier.size(16.dp), tint = if (item.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
-                            Spacer(Modifier.width(5.dp))
-                            Text(if (completed) "Available offline" else if (item.error != null) "Download failed" else "Downloading ${percent.toInt()}%", style = MaterialTheme.typography.labelMedium, color = if (item.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+        if (downloads.isEmpty()) Text("Downloaded tracks will be available without a connection.", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp), contentPadding = PaddingValues(bottom = 16.dp)) {
+            itemsIndexed(downloads, key = { _, d -> d.videoId }) { index, item ->
+                val track = TrackSummary(item.videoId, item.title.ifBlank { item.videoId }, item.artists.split("\u001f").filter { it.isNotBlank() }, highest_resolution_thumbnail = item.artworkUrl)
+                val percent = progress[item.videoId] ?: item.percent
+                val active = item.state == androidx.media3.exoplayer.offline.Download.STATE_QUEUED || item.state == androidx.media3.exoplayer.offline.Download.STATE_DOWNLOADING
+                val isCompleted = item.state == androidx.media3.exoplayer.offline.Download.STATE_COMPLETED
+                val artist = track.artists.joinToString().ifBlank { "Unknown artist" }
+                val artwork = ArtworkCache.displayUri(context, item.videoId, item.artworkUrl)
+                val completedIndex = if (isCompleted) completed.indexOfFirst { it.videoId == item.videoId } else -1
+                Surface(shape = GlassShapeSmall, color = GlassWhite, border = GlassBorder, modifier = Modifier.fillMaxWidth().animateItem().clickable(enabled = isCompleted) { if (completedIndex >= 0) playFrom(completedTracks, completedIndex) else play(track) }) {
+                    Column {
+                        Row(Modifier.fillMaxWidth().padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                            AsyncImage(artwork, null, Modifier.size(56.dp).clip(RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop)
+                            Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
+                                Text(track.title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(artist, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(Modifier.height(4.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(if (isCompleted) Icons.Default.OfflinePin else if (item.error != null) Icons.Default.ErrorOutline else Icons.Default.Download, null, Modifier.size(14.dp), tint = if (item.error != null) MaterialTheme.colorScheme.error else if (isCompleted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(if (isCompleted) "Available offline" else if (item.error != null) "Failed" else "${percent.toInt()}%", style = MaterialTheme.typography.labelSmall, color = if (item.error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                if (isCompleted) IconButton({ if (completedIndex >= 0) playFrom(completedTracks, completedIndex) else play(track) }, Modifier.size(32.dp)) { Icon(Icons.Default.PlayArrow, "Play", Modifier.size(20.dp)) }
+                                IconButton({ downloader.remove(item.videoId) }, Modifier.size(32.dp)) { Icon(Icons.Outlined.DeleteOutline, "Remove", Modifier.size(18.dp)) }
+                            }
                         }
-                        if (active) {
-                            Spacer(Modifier.height(8.dp))
-                            LinearProgressIndicator(progress = { (percent / 100f).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth())
-                        }
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        if (completed) IconButton({ play(track) }) { Icon(Icons.Default.PlayArrow, "Play offline") }
-                        IconButton({ downloader.remove(item.videoId) }) { Icon(Icons.Default.DeleteOutline, "Remove download") }
+                        if (active) LinearProgressIndicator(progress = { (percent / 100f).coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(2.dp), color = MaterialTheme.colorScheme.primary, trackColor = Color.White.copy(alpha = 0.06f))
                     }
                 }
             }
-        } }
+        }
     }
 }
 
-@Composable private fun TrackRow(track: TrackSummary, play: (TrackSummary) -> Unit, favorite: () -> Unit, selected: Boolean, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit, onRemove: (() -> Unit)? = null) {
+/* ── Glass track row ─────────────────────────────────────────────────── */
+
+@Composable
+private fun TrackRow(track: TrackSummary, play: () -> Unit, favorite: () -> Unit, selected: Boolean, download: (TrackSummary) -> Unit, queue: (TrackSummary) -> Unit, playlists: List<LocalPlaylistEntity>, addToPlaylist: (String, TrackSummary) -> Unit, onRemove: (() -> Unit)? = null) {
     var menu by remember { mutableStateOf(false) }
     val downloading = track.video_id in LocalPendingDownloads.current
-    Surface(shape = RoundedCornerShape(8.dp), color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) { ListItem(modifier = Modifier.clickable { play(track) }, colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer), leadingContent = { AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.size(58.dp).clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Crop) }, headlineContent = { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis) }, supportingContent = { Text(track.artists.joinToString().ifBlank { track.uploader ?: "YouTube Music" }, maxLines = 1, overflow = TextOverflow.Ellipsis) }, trailingContent = { Row { IconButton(favorite) { Icon(if (selected) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "Favorite") }; Box { if (downloading) CircularProgressIndicator(Modifier.size(24.dp).align(Alignment.Center), strokeWidth = 2.dp) else IconButton({ menu = true }) { Icon(Icons.Default.MoreVert, "More") }; DropdownMenu(menu, { menu = false }) { DropdownMenuItem({ Text("Add to queue") }, { queue(track); menu = false }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) }); DropdownMenuItem({ Text(if (downloading) "Starting download…" else "Download") }, { if (!downloading) download(track); menu = false }, enabled = !downloading, leadingIcon = { if (downloading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Download, null) }); onRemove?.let { action -> DropdownMenuItem({ Text("Remove from playlist") }, { action(); menu = false }, leadingIcon = { Icon(Icons.Default.RemoveCircleOutline, null) }) }; playlists.forEach { list -> DropdownMenuItem({ Text("Add to ${list.name}") }, { addToPlaylist(list.id, track); menu = false }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) }) } } } } }) }
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.97f else 1f, spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessHigh), label = "row-scale")
+    Surface(
+        shape = GlassShapeSmall,
+        color = GlassWhite,
+        border = GlassBorder,
+        modifier = Modifier.fillMaxWidth().graphicsLayer { scaleX = scale; scaleY = scale }
+    ) {
+        ListItem(
+            modifier = Modifier.clickable(interactionSource = interactionSource, indication = null) { play() },
+            colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+            leadingContent = { AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.size(48.dp).clip(RoundedCornerShape(10.dp)), contentScale = ContentScale.Crop) },
+            headlineContent = { Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge) },
+            supportingContent = { Text(track.artists.joinToString().ifBlank { track.uploader ?: "YouTube Music" }, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+            trailingContent = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(favorite, Modifier.size(32.dp)) {
+                        Crossfade(selected, label = "fav") { isFav ->
+                            Icon(if (isFav) Icons.Default.Favorite else Icons.Default.FavoriteBorder, "Favorite", Modifier.size(18.dp), tint = if (isFav) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    Box {
+                        if (downloading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp) else IconButton({ menu = true }, Modifier.size(32.dp)) { Icon(Icons.Default.MoreVert, "More", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        DropdownMenu(menu, { menu = false }) {
+                            DropdownMenuItem({ Text("Add to queue") }, { queue(track); menu = false }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) })
+                            DropdownMenuItem({ Text(if (downloading) "Starting…" else "Download") }, { if (!downloading) download(track); menu = false }, enabled = !downloading, leadingIcon = { if (downloading) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp) else Icon(Icons.Default.Download, null) })
+                            onRemove?.let { action -> DropdownMenuItem({ Text("Remove") }, { action(); menu = false }, leadingIcon = { Icon(Icons.Default.RemoveCircleOutline, null) }) }
+                            playlists.forEach { list -> DropdownMenuItem({ Text("Add to ${list.name}") }, { addToPlaylist(list.id, track); menu = false }, leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) }) }
+                        }
+                    }
+                }
+            }
+        )
+    }
 }
 
-@Composable private fun MiniPlayer(track: TrackSummary, playing: Boolean, toggle: () -> Unit, next: () -> Unit, expand: () -> Unit) {
-    Surface(tonalElevation = 3.dp) { Row(Modifier.fillMaxWidth().height(68.dp).clickable(onClick = expand).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) { AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.size(52.dp)); Text(track.title, Modifier.weight(1f).padding(10.dp), maxLines = 1, overflow = TextOverflow.Ellipsis); IconButton(toggle) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play") }; IconButton(next) { Icon(Icons.Default.SkipNext, "Next") } } }
-}
+/* ── Full player ─────────────────────────────────────────────────────── */
 
 @OptIn(ExperimentalFoundationApi::class)
-@Composable private fun FullPlayer(state: PlaybackState, connection: PlaybackConnection, close: () -> Unit) {
+@Composable
+private fun FullPlayer(state: PlaybackState, connection: PlaybackConnection, close: () -> Unit) {
+    BackHandler { close() }
     val track = state.current ?: return
     val app = LocalContext.current.applicationContext as YtuneApplication
     val scope = rememberCoroutineScope()
@@ -372,44 +562,181 @@ private fun PlaylistDetailScreen(playlist: LocalPlaylistEntity, tracks: List<Tra
         }
     }
     LaunchedEffect(activeLyric, pager.currentPage) { if (pager.currentPage == 1 && syncedLines.isNotEmpty()) lyricListState.animateScrollToItem(activeLyric) }
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-        Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(close) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) { Text(if (pager.currentPage == 0) "Now playing" else "Lyrics", style = MaterialTheme.typography.labelLarge); Text(track.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            IconButton({ scope.launch { pager.animateScrollToPage(if (pager.currentPage == 0) 1 else 0) } }) { Icon(if (pager.currentPage == 0) Icons.Default.Lyrics else Icons.Default.GraphicEq, if (pager.currentPage == 0) "Show lyrics" else "Show player") }
+
+    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding().navigationBarsPadding()) {
+        /* Top bar */
+        Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(close, Modifier.size(40.dp)) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", Modifier.size(20.dp)) }
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(if (pager.currentPage == 0) "Now Playing" else "Lyrics", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton({ scope.launch { pager.animateScrollToPage(if (pager.currentPage == 0) 1 else 0) } }, Modifier.size(40.dp)) {
+                Icon(if (pager.currentPage == 0) Icons.Default.Lyrics else Icons.Default.GraphicEq, "Toggle", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+            }
         }
+        /* Pager */
         HorizontalPager(state = pager, modifier = Modifier.weight(1f), beyondViewportPageCount = 1) { page ->
             if (page == 0) PlayerPage(state, connection) { scope.launch { pager.animateScrollToPage(1) } }
             else LyricsPage(lyrics, lyricsLoading, syncedLines, activeLyric, lyricListState, connection)
         }
-        Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.Center) { repeat(2) { page -> Box(Modifier.padding(3.dp).size(if (pager.currentPage == page) 18.dp else 6.dp, 6.dp).clip(RoundedCornerShape(3.dp)).background(if (pager.currentPage == page) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant)) } }
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable private fun PlayerPage(state: PlaybackState, connection: PlaybackConnection, showLyrics: () -> Unit) {
-    val track = state.current ?: return
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        item { AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null, Modifier.fillMaxWidth().widthIn(max = 460.dp).aspectRatio(1f).clip(RoundedCornerShape(20.dp)), contentScale = ContentScale.Crop) }
-        item { Spacer(Modifier.height(24.dp)); Text(track.title, Modifier.fillMaxWidth(), style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis); Text(track.artists.joinToString().ifBlank { track.uploader ?: "Unknown artist" }, Modifier.fillMaxWidth().padding(top = 4.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-        item { Spacer(Modifier.height(14.dp)); Slider(state.positionMs.toFloat(), { connection.seek(it.toLong()) }, valueRange = 0f..state.durationMs.coerceAtLeast(1).toFloat()); Row(Modifier.fillMaxWidth()) { Text(formatTime(state.positionMs), style = MaterialTheme.typography.labelSmall); Spacer(Modifier.weight(1f)); Text("-${formatTime((state.durationMs - state.positionMs).coerceAtLeast(0))}", style = MaterialTheme.typography.labelSmall) } }
-        item { Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) { IconButton(connection::toggleShuffle) { Icon(Icons.Default.Shuffle, "Shuffle", tint = if (state.shuffle) MaterialTheme.colorScheme.primary else LocalContentColor.current) }; IconButton(connection::previous, enabled = state.hasPrevious) { Icon(Icons.Default.SkipPrevious, "Previous", Modifier.size(34.dp)) }; FilledIconButton(connection::toggle, Modifier.size(52.dp)) { Icon(if (state.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play", Modifier.size(28.dp)) }; IconButton(connection::next, enabled = state.hasNext) { Icon(Icons.Default.SkipNext, "Next", Modifier.size(34.dp)) }; IconButton(connection::cycleRepeat) { Icon(if (state.repeatMode == 1) Icons.Default.RepeatOne else Icons.Default.Repeat, "Repeat", tint = if (state.repeatMode != 0) MaterialTheme.colorScheme.primary else LocalContentColor.current) } } }
-        item { OutlinedButton(showLyrics, Modifier.fillMaxWidth().padding(vertical = 8.dp)) { Icon(Icons.Default.Lyrics, null); Spacer(Modifier.width(8.dp)); Text("Swipe for lyrics") } }
-        if (state.queue.isNotEmpty()) {
-            item { Row(Modifier.fillMaxWidth().padding(top = 20.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) { Text("Up next", Modifier.weight(1f), style = MaterialTheme.typography.titleLarge); Text("${state.queue.size} tracks", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelMedium) } }
-            itemsIndexed(state.queue, key = { index, item -> "$index-${item.video_id}" }) { index, item -> ListItem(modifier = Modifier.fillMaxWidth().clickable { connection.seekToItem(index) }, colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent), leadingContent = { AsyncImage(item.highest_resolution_thumbnail ?: item.thumbnail, null, Modifier.size(48.dp).clip(RoundedCornerShape(6.dp)), contentScale = ContentScale.Crop) }, headlineContent = { Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, color = if (index == state.currentIndex) MaterialTheme.colorScheme.primary else LocalContentColor.current) }, supportingContent = { Text(item.artists.joinToString(), maxLines = 1, overflow = TextOverflow.Ellipsis) }, trailingContent = { if (index == state.currentIndex) Icon(Icons.Default.GraphicEq, "Playing", tint = MaterialTheme.colorScheme.primary) }) }
+        /* Page indicator */
+        Row(Modifier.fillMaxWidth().padding(bottom = 4.dp), horizontalArrangement = Arrangement.Center) {
+            repeat(2) { page ->
+                val width by animateDpAsState(if (pager.currentPage == page) 16.dp else 6.dp, spring(dampingRatio = Spring.DampingRatioMediumBouncy), label = "dot-w")
+                Box(Modifier.padding(2.dp).size(width, 4.dp).clip(RoundedCornerShape(2.dp)).background(if (pager.currentPage == page) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant))
+            }
         }
     }
 }
 
-@Composable private fun LyricsPage(lyrics: String?, loading: Boolean, synced: List<LrcLine>, active: Int, listState: androidx.compose.foundation.lazy.LazyListState, connection: PlaybackConnection) {
-    when {
-        loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
-        lyrics == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Swipe here to load lyrics", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        synced.isNotEmpty() -> LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(horizontal = 24.dp, vertical = 40.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) { itemsIndexed(synced) { index, line -> Text(line.text, Modifier.fillMaxWidth().clickable { connection.seek(line.timeMs) }, style = if (index == active) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleLarge, color = if (index == active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)) } }
-        else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 24.dp, vertical = 40.dp)) { item { Text(lyrics, style = MaterialTheme.typography.titleLarge, lineHeight = MaterialTheme.typography.titleLarge.lineHeight * 1.25f) } }
+/* ── Player page ─────────────────────────────────────────────────────── */
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun PlayerPage(state: PlaybackState, connection: PlaybackConnection, showLyrics: () -> Unit) {
+    val track = state.current ?: return
+    val sliderPos = remember { mutableFloatStateOf(0f) }
+    var dragging by remember { mutableStateOf(false) }
+    val displayPos = if (dragging) sliderPos.floatValue else state.positionMs.toFloat()
+
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        /* Artwork */
+        item {
+            AsyncImage(track.highest_resolution_thumbnail ?: track.thumbnail, null,
+                Modifier.fillMaxWidth().widthIn(max = 400.dp).aspectRatio(1f).clip(RoundedCornerShape(24.dp)),
+                contentScale = ContentScale.Crop)
+        }
+        /* Title + artist */
+        item {
+            Spacer(Modifier.height(20.dp))
+            Text(track.title, Modifier.fillMaxWidth(), style = MaterialTheme.typography.headlineSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(track.artists.joinToString().ifBlank { track.uploader ?: "Unknown artist" }, Modifier.fillMaxWidth().padding(top = 4.dp), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        /* Slider */
+        item {
+            Spacer(Modifier.height(16.dp))
+            Slider(
+                value = displayPos,
+                onValueChange = { sliderPos.floatValue = it; dragging = true },
+                onValueChangeFinished = { connection.seek(sliderPos.floatValue.toLong()); dragging = false },
+                valueRange = 0f..state.durationMs.coerceAtLeast(1).toFloat(),
+                colors = SliderDefaults.colors(thumbColor = MaterialTheme.colorScheme.primary, activeTrackColor = MaterialTheme.colorScheme.primary, inactiveTrackColor = Color.White.copy(alpha = 0.1f)),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
+                Text(formatTime(displayPos.toLong()), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.weight(1f))
+                Text("-${formatTime((state.durationMs - displayPos.toLong()).coerceAtLeast(0))}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        /* Transport controls */
+        item {
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                /* Shuffle */
+                IconButton(connection::toggleShuffle, Modifier.size(44.dp)) {
+                    Icon(Icons.Default.Shuffle, "Shuffle", Modifier.size(22.dp), tint = if (state.shuffle) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (state.shuffle) Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp).size(4.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
+                }
+                /* Previous */
+                IconButton(connection::previous, Modifier.size(48.dp), enabled = state.hasPrevious) {
+                    Icon(Icons.Default.SkipPrevious, "Previous", Modifier.size(30.dp), tint = if (state.hasPrevious) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
+                }
+                /* Play/Pause */
+                FilledIconButton(connection::toggle, Modifier.size(60.dp), shape = CircleShape, colors = IconButtonDefaults.filledIconButtonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary)) {
+                    Crossfade(state.playing, animationSpec = tween(180), label = "pp") { playing ->
+                        Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play", Modifier.size(30.dp))
+                    }
+                }
+                /* Next */
+                IconButton(connection::next, Modifier.size(48.dp), enabled = state.hasNext) {
+                    Icon(Icons.Default.SkipNext, "Next", Modifier.size(30.dp), tint = if (state.hasNext) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
+                }
+                /* Repeat */
+                IconButton(connection::cycleRepeat, Modifier.size(44.dp)) {
+                    Icon(if (state.repeatMode == 1) Icons.Default.RepeatOne else Icons.Default.Repeat, "Repeat", Modifier.size(22.dp), tint = if (state.repeatMode != 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (state.repeatMode != 0) Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp).size(4.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
+                }
+            }
+        }
+        /* Lyrics shortcut */
+        item {
+            OutlinedButton(showLyrics, Modifier.fillMaxWidth().padding(vertical = 8.dp), shape = RoundedCornerShape(14.dp), border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))) {
+                Icon(Icons.Default.Lyrics, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text("Lyrics")
+            }
+        }
+        /* Up next */
+        if (state.queue.isNotEmpty()) {
+            item { Row(Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) { Text("Up next", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium); Text("${state.queue.size} tracks", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall) } }
+            itemsIndexed(state.queue, key = { index, item -> "$index-${item.video_id}" }) { index, item ->
+                val isCurrent = index == state.currentIndex
+                ListItem(
+                    modifier = Modifier.fillMaxWidth().clip(GlassShapeSmall).clickable { connection.seekToItem(index) },
+                    colors = ListItemDefaults.colors(containerColor = if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else Color.Transparent),
+                    leadingContent = { AsyncImage(item.highest_resolution_thumbnail ?: item.thumbnail, null, Modifier.size(40.dp).clip(RoundedCornerShape(8.dp)), contentScale = ContentScale.Crop) },
+                    headlineContent = { Text(item.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium, color = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface) },
+                    supportingContent = { Text(item.artists.joinToString(), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    trailingContent = { if (isCurrent) Icon(Icons.Default.GraphicEq, "Playing", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) }
+                )
+            }
+        }
     }
 }
+
+/* ── Lyrics page ─────────────────────────────────────────────────────── */
+
+@Composable
+private fun LyricsPage(lyrics: String?, loading: Boolean, synced: List<LrcLine>, active: Int, listState: androidx.compose.foundation.lazy.LazyListState, connection: PlaybackConnection) {
+    when {
+        loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator(color = MaterialTheme.colorScheme.primary, strokeWidth = 2.dp) }
+        lyrics == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Swipe here to load lyrics", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge) }
+        synced.isNotEmpty() -> LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(horizontal = 24.dp, vertical = 40.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            itemsIndexed(synced) { index, line ->
+                val isActive = index == active
+                val alpha by animateFloatAsState(if (isActive) 1f else 0.4f, tween(300), label = "lyric-alpha")
+                val scale by animateFloatAsState(if (isActive) 1f else 0.95f, spring(dampingRatio = Spring.DampingRatioMediumBouncy), label = "lyric-scale")
+                Text(
+                    line.text,
+                    Modifier.fillMaxWidth().graphicsLayer { scaleX = scale; scaleY = scale }.clickable { connection.seek(line.timeMs) },
+                    style = if (isActive) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha)
+                )
+            }
+        }
+        else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 24.dp, vertical = 40.dp)) { item { Text(lyrics, style = MaterialTheme.typography.titleLarge, lineHeight = MaterialTheme.typography.titleLarge.lineHeight * 1.25f, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)) } }
+    }
+}
+
+/* ── Shared glass components ─────────────────────────────────────────── */
+
+@Composable
+private fun GlassTextField(value: String, onChange: (String) -> Unit, placeholder: String, loading: Boolean, onSearch: () -> Unit) {
+    OutlinedTextField(
+        value, onChange, Modifier.fillMaxWidth(),
+        singleLine = true,
+        shape = RoundedCornerShape(14.dp),
+        placeholder = { Text(placeholder, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f), style = MaterialTheme.typography.bodyMedium) },
+        trailingIcon = {
+            if (loading) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
+            else IconButton(onSearch) { Icon(Icons.Default.Search, "Search", Modifier.size(20.dp)) }
+        },
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+            unfocusedBorderColor = Color.White.copy(alpha = 0.08f),
+            focusedContainerColor = GlassWhite,
+            unfocusedContainerColor = GlassWhite,
+            cursorColor = MaterialTheme.colorScheme.primary
+        )
+    )
+}
+
+@Composable
+private fun GlassChip(label: String, onClick: () -> Unit) {
+    Surface(onClick = onClick, shape = RoundedCornerShape(20.dp), color = GlassWhite, border = GlassBorder) {
+        Text(label, Modifier.padding(horizontal = 14.dp, vertical = 7.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+    }
+}
+
+/* ── Utilities ───────────────────────────────────────────────────────── */
 
 private data class LrcLine(val timeMs: Long, val text: String)
 private fun formatTime(value: Long): String = "%d:%02d".format(value.coerceAtLeast(0) / 60_000, value.coerceAtLeast(0) / 1_000 % 60)
@@ -418,5 +745,3 @@ private fun parseLrc(value: String?): List<LrcLine> = value.orEmpty().lineSequen
     val fraction = match.groupValues[3].padEnd(3, '0').take(3).toLongOrNull() ?: 0
     sequenceOf(LrcLine((match.groupValues[1].toLong() * 60 + match.groupValues[2].toLong()) * 1000 + fraction, match.groupValues[4]))
 }.filter { it.text.isNotBlank() }.sortedBy { it.timeMs }.toList()
-
-private fun Destination.icon() = when (this) { Destination.Home -> Icons.Default.Home; Destination.Search -> Icons.Default.Search; Destination.Library -> Icons.Default.LibraryMusic; Destination.Downloads -> Icons.Default.Download }

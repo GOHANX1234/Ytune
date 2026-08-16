@@ -95,6 +95,16 @@ class PlaybackConnection(context: Context) {
         }
     }
     fun addToQueue(track: TrackSummary) { controller?.addMediaItem(track.mediaItem(app)) }
+    fun playAll(tracks: List<TrackSummary>, startIndex: Int = 0) {
+        scope.launch {
+            val items = tracks.map { it.mediaItem(app) }
+            controller?.apply {
+                setMediaItems(items, startIndex, 0)
+                prepare()
+                play()
+            }
+        }
+    }
     fun toggle() { controller?.let { if (it.isPlaying) it.pause() else it.play() } }
     fun next() { controller?.seekToNextMediaItem() }
     fun previous() { controller?.seekToPreviousMediaItem() }
