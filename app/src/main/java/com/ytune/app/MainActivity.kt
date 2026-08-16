@@ -323,7 +323,7 @@ private fun HomeScreen(vm: YtuneViewModel, search: (String) -> Unit, play: (Trac
         item { GlassTextField(vm.query, { vm.query = it }, "Songs, artists, or playlist links", vm.loading) { search(vm.query) } }
         item { Text("Quick starts", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 4.dp)); Spacer(Modifier.height(4.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("Top hits", "Chill", "Workout", "Focus").forEach { GlassChip(it) { search(it) } } } }
         remotePlaylist?.let { loaded ->
-            val plTracks = remember(loaded) { loaded.tracks.map { item -> TrackSummary(item.video_id, item.title, listOfNotNull(item.uploader), duration_seconds = item.duration_seconds, thumbnail = item.thumbnail) } }
+            val plTracks = loaded.tracks.map { item -> TrackSummary(item.video_id, item.title, listOfNotNull(item.uploader), duration_seconds = item.duration_seconds, thumbnail = item.thumbnail) }
             item { Text(loaded.playlist.title, style = MaterialTheme.typography.titleLarge); Text("${loaded.tracks.size} tracks", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall) }
             itemsIndexed(plTracks) { index, track -> TrackRow(track, { playFrom(plTracks, index) }, { favorite(track) }, track.video_id in selected, download, queue, playlists, addToPlaylist) }
         }
@@ -633,8 +633,10 @@ private fun PlayerPage(state: PlaybackState, connection: PlaybackConnection, sho
         item {
             Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
                 /* Shuffle */
-                IconButton(connection::toggleShuffle, Modifier.size(44.dp)) {
-                    Icon(Icons.Default.Shuffle, "Shuffle", Modifier.size(22.dp), tint = if (state.shuffle) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                Box(contentAlignment = Alignment.Center) {
+                    IconButton(connection::toggleShuffle, Modifier.size(44.dp)) {
+                        Icon(Icons.Default.Shuffle, "Shuffle", Modifier.size(22.dp), tint = if (state.shuffle) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     if (state.shuffle) Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp).size(4.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
                 }
                 /* Previous */
@@ -652,8 +654,10 @@ private fun PlayerPage(state: PlaybackState, connection: PlaybackConnection, sho
                     Icon(Icons.Default.SkipNext, "Next", Modifier.size(30.dp), tint = if (state.hasNext) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
                 }
                 /* Repeat */
-                IconButton(connection::cycleRepeat, Modifier.size(44.dp)) {
-                    Icon(if (state.repeatMode == 1) Icons.Default.RepeatOne else Icons.Default.Repeat, "Repeat", Modifier.size(22.dp), tint = if (state.repeatMode != 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                Box(contentAlignment = Alignment.Center) {
+                    IconButton(connection::cycleRepeat, Modifier.size(44.dp)) {
+                        Icon(if (state.repeatMode == 1) Icons.Default.RepeatOne else Icons.Default.Repeat, "Repeat", Modifier.size(22.dp), tint = if (state.repeatMode != 0) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     if (state.repeatMode != 0) Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp).size(4.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
                 }
             }
