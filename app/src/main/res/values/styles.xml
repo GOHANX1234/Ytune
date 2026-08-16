@@ -10,7 +10,7 @@
 
     <style name="Theme.Ytune.Splash" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">#090B0A</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_ytune</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_ytune_splash</item>
         <item name="windowSplashScreenIconBackgroundColor">#090B0A</item>
         <item name="postSplashScreenTheme">@style/Theme.Ytune</item>
     </style>

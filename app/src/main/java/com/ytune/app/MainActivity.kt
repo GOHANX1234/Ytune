@@ -250,7 +250,7 @@ private fun LibraryScreen(favorites: List<FavoriteTrack>, history: List<HistoryT
                 ListItem(
                     headlineContent = { Text(playlist.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     supportingContent = { Text("View songs", color = MaterialTheme.colorScheme.onSurfaceVariant) },
-                    leadingContent = { Icon(Icons.Default.QueueMusic, null, tint = MaterialTheme.colorScheme.primary) },
+                    leadingContent = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null, tint = MaterialTheme.colorScheme.primary) },
                     trailingContent = { Icon(Icons.Default.ChevronRight, "Open playlist") },
                     colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
                 )

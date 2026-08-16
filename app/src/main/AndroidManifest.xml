@@ -10,8 +10,8 @@
         android:name=".YtuneApplication"
         android:theme="@style/Theme.Ytune"
         android:label="Ytune"
-        android:icon="@drawable/ic_ytune"
-        android:roundIcon="@drawable/ic_ytune"
+        android:icon="@mipmap/ic_ytune"
+        android:roundIcon="@mipmap/ic_ytune"
         android:usesCleartextTraffic="true">
         <activity android:name=".MainActivity" android:exported="true" android:theme="@style/Theme.Ytune.Splash">
             <intent-filter>
